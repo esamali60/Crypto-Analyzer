@@ -11,16 +11,23 @@ def get_crypto_data(symbol, timeframe="1h"):
     """
     دالة لجلب بيانات العملة من الإنترنت (منصة KuCoin).
     """
-    formatted_symbol = symbol.replace("/", "-").upper()
+    # 🌟 التعديل الجديد: إزالة أي مسافات يكتبها المستخدم بالخطأ
+    clean_symbol = symbol.replace(" ", "")
+    
+    # تحويل الرمز للصيغة المطلوبة للمنصة (مثال: ETH-USDT)
+    formatted_symbol = clean_symbol.replace("/", "-").upper()
+    
+    # رابط جلب البيانات
     url = f"https://api.kucoin.com/api/v1/market/candles?symbol={formatted_symbol}&type={timeframe}"
     
     response = requests.get(url)
     data = response.json()
     
+    # التحقق من وجود خطأ أو عدم توفر بيانات
     if data['code'] != '200000' or not data['data']:
         return None
 
-    # تحويل البيانات إلى جدول
+    # تحويل البيانات إلى جدول ليسهل تحليلها
     raw_data = data['data']
     df = pd.DataFrame(raw_data, columns=['time', 'open', 'close', 'high', 'low', 'volume', 'turnover'])
     df['close'] = df['close'].astype(float)
@@ -62,6 +69,7 @@ if st.button("تحليل الآن 🔍"):
     if user_symbol:
         st.info("جاري جلب بيانات السوق وتحليلها...")
         
+        # استدعاء دالة جلب البيانات
         df = get_crypto_data(user_symbol)
         
         if df is not None:
