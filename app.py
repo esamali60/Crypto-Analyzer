@@ -7,11 +7,11 @@ import ta
 # إعداد واجهة الموقع الأساسية
 st.set_page_config(page_title="مُتابع العملات الرقمية", page_icon="🚀")
 
-def get_crypto_data(symbol, timeframe="1h"):
+def get_crypto_data(symbol, timeframe="1hour"): # 🌟 تم إصلاح الإطار الزمني هنا إلى 1hour
     """
     دالة لجلب بيانات العملة من الإنترنت (منصة KuCoin).
     """
-    # 🌟 التعديل الجديد: إزالة أي مسافات يكتبها المستخدم بالخطأ
+    # تنظيف الرمز من المسافات
     clean_symbol = symbol.replace(" ", "")
     
     # تحويل الرمز للصيغة المطلوبة للمنصة (مثال: ETH-USDT)
@@ -20,19 +20,23 @@ def get_crypto_data(symbol, timeframe="1h"):
     # رابط جلب البيانات
     url = f"https://api.kucoin.com/api/v1/market/candles?symbol={formatted_symbol}&type={timeframe}"
     
-    response = requests.get(url)
-    data = response.json()
-    
-    # التحقق من وجود خطأ أو عدم توفر بيانات
-    if data['code'] != '200000' or not data['data']:
-        return None
+    try:
+        response = requests.get(url)
+        data = response.json()
+        
+        # التحقق من وجود خطأ أو عدم توفر بيانات
+        if data['code'] != '200000' or not data['data']:
+            return None
 
-    # تحويل البيانات إلى جدول ليسهل تحليلها
-    raw_data = data['data']
-    df = pd.DataFrame(raw_data, columns=['time', 'open', 'close', 'high', 'low', 'volume', 'turnover'])
-    df['close'] = df['close'].astype(float)
-    df = df.iloc[::-1].reset_index(drop=True) # ترتيب من الأقدم للأحدث
-    return df
+        # تحويل البيانات إلى جدول ليسهل تحليلها
+        raw_data = data['data']
+        df = pd.DataFrame(raw_data, columns=['time', 'open', 'close', 'high', 'low', 'volume', 'turnover'])
+        df['close'] = df['close'].astype(float)
+        df = df.iloc[::-1].reset_index(drop=True) # ترتيب من الأقدم للأحدث
+        return df
+    except Exception:
+        # في حال وجود مشكلة في الاتصال بالإنترنت
+        return None
 
 def analyze_technical(df):
     """
@@ -103,6 +107,6 @@ if st.button("تحليل الآن 🔍"):
             
             st.caption("ملاحظة: هذه البيانات مبنية على التحليل الفني الآلي، يرجى التداول بحذر.")
         else:
-            st.error("❌ تأكد من كتابة رمز العملة بشكل صحيح (مثال: ETH/USDT).")
+            st.error("❌ عذراً، لم نتمكن من جلب البيانات. تأكد من صحة الرمز أو أن المنصة تدعمه.")
     else:
         st.warning("الرجاء إدخال رمز العملة.")
