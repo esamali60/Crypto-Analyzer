@@ -10,7 +10,7 @@ st.set_page_config(page_title="المحلل الذكي الشامل", layout="wi
 # --- 1. البنر العلوي ---
 st.markdown("""
     <div style="background-color: #1e1e1e; border: 1px dashed #444; padding: 15px; text-align: center; border-radius: 10px; margin-bottom: 20px;">
-        <p style="color: #888; font-size: 14px; margin: 0;">مساحة إعلانية علوية</p>
+        <p style="color: #888; font-size: 14px; margin: 0;"><script> atOptions = { 'key' : '9a374e1ba3c8e64316b7e2eb29f45a7a', 'format' : 'iframe', 'height' : 90, 'width' : 728, 'params' : {} }; </script> <script src="https://www.highperformanceformat.com/9a374e1ba3c8e64316b7e2eb29f45a7a/invoke.js"></script></p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -77,6 +77,6 @@ with col_ads:
     st.subheader("📢 إعلانات")
     st.markdown("""
         <div style="background-color: #1e1e1e; border: 1px dashed #444; padding: 20px; border-radius: 10px; height: 500px; color: #888; text-align: center;">
-            <p>ضع كود الإعلان الجانبي هنا</p>
+            <p><script> atOptions = { 'key' : '04e5cc65f1f9df82e44cdac786768a40', 'format' : 'iframe', 'height' : 250, 'width' : 300, 'params' : {} }; </script> <script src="https://www.highperformanceformat.com/04e5cc65f1f9df82e44cdac786768a40/invoke.js"></script></p>
         </div>
     """, unsafe_allow_html=True)
