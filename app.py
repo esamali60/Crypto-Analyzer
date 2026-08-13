@@ -1,179 +1,92 @@
-# استدعاء المكتبات المطلوبة
 import streamlit as st
-import requests
 import pandas as pd
 import ta
 from textblob import TextBlob
-import yfinance as yf # 🌟 المكتبة الجديدة الخاصة بأسهم الشركات
+import yfinance as yf
 
-# إعداد واجهة الموقع الأساسية
-st.set_page_config(page_title="المحلل الذكي للأسواق", page_icon="📈", layout="centered")
+# إعداد الصفحة لتكون واسعة (Wide) لتناسب الإعلانات
+st.set_page_config(page_title="المحلل الذكي الشامل", layout="wide")
 
-# ==========================================
-# 1. دوال جلب البيانات (الأسعار)
-# ==========================================
+# --- 1. البنر العلوي (Header) ---
+st.markdown("""
+    <div style="background-color: #f0f2f6; padding: 20px; text-align: center; border-radius: 10px; margin-bottom: 20px;">
+        <h3><script src="https://pl30828515.effectivecpmnetwork.com/ef/a6/00/efa600e9f6c186772834551c15b76c98.js"></script></h3>
+        <p style="font-size: 0.8em; color: #555;">هنا يظهر إعلانك العلوي</p>
+    </div>
+""", unsafe_allow_html=True)
 
-def get_crypto_data(symbol, timeframe="1hour"):
-    """دالة لجلب بيانات العملات الرقمية"""
-    clean_symbol = symbol.replace(" ", "")
-    formatted_symbol = clean_symbol.replace("/", "-").upper()
-    url = f"https://api.kucoin.com/api/v1/market/candles?symbol={formatted_symbol}&type={timeframe}"
-    
+# --- دوال التحليل والبيانات ---
+def get_market_data(symbol):
     try:
-        response = requests.get(url)
-        data = response.json()
-        
-        if data['code'] != '200000' or not data['data']:
-            return None
-
-        raw_data = data['data']
-        df = pd.DataFrame(raw_data, columns=['time', 'open', 'close', 'high', 'low', 'volume', 'turnover'])
-        df['close'] = df['close'].astype(float)
-        df = df.iloc[::-1].reset_index(drop=True) 
-        return df
-    except Exception:
-        return None
-
-def get_stock_data(symbol):
-    """🌟 دالة جديدة: جلب بيانات أسهم الشركات"""
-    clean_symbol = symbol.replace(" ", "").upper()
-    try:
-        # جلب بيانات السهم لآخر شهر على إطار الساعة
-        ticker = yf.Ticker(clean_symbol)
+        ticker = yf.Ticker(symbol.replace(" ", "").upper())
         df = ticker.history(period="1mo", interval="1h")
-        
-        if df.empty:
-            return None
-            
-        # توحيد أسماء الأعمدة لتتناسب مع التحليل الفني
+        if df.empty: return None
         df = df.reset_index()
         df.rename(columns={'Open': 'open', 'Close': 'close', 'High': 'high', 'Low': 'low', 'Volume': 'volume'}, inplace=True)
         return df
-    except Exception:
-        return None
-
-# ==========================================
-# 2. دوال التحليل الفني والمشاعر
-# ==========================================
+    except: return None
 
 def analyze_technical(df):
-    """حساب المؤشرات الفنية للأسهم والعملات"""
-    rsi_indicator = ta.momentum.RSIIndicator(close=df['close'], window=14)
-    df['rsi'] = rsi_indicator.rsi()
-    
-    bb_indicator = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
-    df['bb_high'] = bb_indicator.bollinger_hband()
-    df['bb_low'] = bb_indicator.bollinger_lband() 
-    
-    latest_rsi = df['rsi'].iloc[-1]
-    latest_price = df['close'].iloc[-1]
-    support = df['bb_low'].iloc[-1]
-    resistance = df['bb_high'].iloc[-1]
-    
-    return latest_price, latest_rsi, support, resistance
+    rsi = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
+    bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
+    return df['close'].iloc[-1], rsi.iloc[-1], bb.bollinger_lband().iloc[-1], bb.bollinger_hband().iloc[-1]
 
 def analyze_news_sentiment(text):
-    """تحديد ما إذا كان الخبر إيجابياً أم سلبياً"""
-    analysis = TextBlob(text)
-    if analysis.sentiment.polarity > 0.1:
-        return "إيجابي 🟢"
-    elif analysis.sentiment.polarity < -0.1:
-        return "سلبي 🔴"
-    else:
-        return "محايد ⚪"
-
-# ==========================================
-# 3. دوال جلب الأخبار
-# ==========================================
-
-def get_crypto_news():
-    """جلب أخبار العملات الرقمية"""
-    url = "https://min-api.cryptocompare.com/data/v2/news/?lang=EN"
     try:
-        response = requests.get(url)
-        data = response.json()
-        if data.get('Message') == 'News list successfully returned':
-            return [{'title': item['title'], 'url': item['url']} for item in data['Data'][:5]]
-        return None
-    except Exception:
-        return None
+        pol = TextBlob(text).sentiment.polarity
+        return "إيجابي 🟢" if pol > 0.05 else "سلبي 🔴" if pol < -0.05 else "محايد ⚪"
+    except: return "محايد ⚪"
 
-def get_stock_news(symbol):
-    """🌟 دالة جديدة: جلب أخبار الشركة المطلوبة تحديداً"""
-    clean_symbol = symbol.replace(" ", "").upper()
+def get_market_news(symbol):
     try:
-        ticker = yf.Ticker(clean_symbol)
-        news = ticker.news
-        if not news:
-            return None
-        return [{'title': item['title'], 'url': item['link']} for item in news[:5]]
-    except Exception:
-        return None
+        news = yf.Ticker(symbol.upper()).news
+        return [{'title': i.get('title'), 'link': i.get('link', '#')} for i in news[:5]]
+    except: return None
 
-# ==========================================
-# 4. تصميم واجهة الموقع
-# ==========================================
+# --- تقسيم الصفحة (الوسط للتحليل، اليمين للإعلانات) ---
+col_main, col_ads = st.columns([3, 1])
 
-st.title("📈 المحلل الذكي الشامل للأسواق")
-st.write("يدعم الآن تحليل العملات الرقمية وأسهم الشركات العالمية!")
+with col_main:
+    st.title("🚀 المحلل الذكي الشامل")
+    market = st.radio("اختر السوق:", ["العملات الرقمية 🪙", "الأسهم العالمية 🏢"])
+    user_symbol = st.text_input("أدخل رمز الأصل (مثل BTC-USD أو AAPL):", "BTC-USD" if market == "العملات الرقمية 🪙" else "AAPL")
 
-# 🌟 اختيار نوع السوق
-market_type = st.radio("الرجاء اختيار السوق الذي تود تحليله:", ["العملات الرقمية 🪙", "الأسهم العالمية 🏢"])
-
-# تخصيص مربع البحث بناءً على الاختيار
-if market_type == "العملات الرقمية 🪙":
-    user_symbol = st.text_input("رمز العملة (مثال: BTC/USDT):", "BTC/USDT")
-else:
-    user_symbol = st.text_input("رمز السهم (مثال: AAPL لشركة آبل، أو BABA لشركة علي بابا):", "BABA")
-
-if st.button("تحليل شامل الآن 🔍"):
-    if user_symbol:
-        st.info("جاري فحص السوق وقراءة الأخبار...")
-        
-        # جلب البيانات بناءً على نوع السوق
-        if market_type == "العملات الرقمية 🪙":
-            df = get_crypto_data(user_symbol)
-            news_data = get_crypto_news()
-        else:
-            df = get_stock_data(user_symbol)
-            news_data = get_stock_news(user_symbol)
-        
-        if df is not None:
-            # --- القسم الأول: التحليل الفني ---
-            price, rsi, support, resistance = analyze_technical(df)
+    if st.button("تحليل شامل الآن 🔍"):
+        with st.spinner('جاري التحليل...'):
+            df = get_market_data(user_symbol)
+            news = get_market_news(user_symbol)
             
-            st.success("تم الانتهاء من فحص البيانات الفنية!")
-            col1, col2 = st.columns(2)
-            col1.metric("السعر الحالي", f"${price:,.2f}")
-            col2.metric("مؤشر (RSI)", f"{rsi:.2f}")
-            
-            st.markdown("---")
-            st.subheader("📊 حالة السوق الفنية:")
-            if rsi <= 30:
-                st.success("الأصل في قاع (تشبع بيعي) - احتمالية الصعود أعلى 🟢")
-            elif rsi >= 70:
-                st.error("الأصل في قمة (تشبع شرائي) - احتمالية الهبوط أعلى 🔴")
-            else:
-                st.warning("الأصل في مسار محايد ومستقر ⚪")
+            if df is not None:
+                price, rsi, sup, res = analyze_technical(df)
+                c1, c2 = st.columns(2)
+                c1.metric("السعر الحالي", f"${price:,.2f}")
+                c2.metric("مؤشر RSI", f"{rsi:.2f}")
                 
-            st.write(f"**🟢 نقطة الشراء المقترحة (الدعم):** ${support:,.2f}")
-            st.write(f"**🔴 نقطة البيع المقترحة (المقاومة):** ${resistance:,.2f}")
-            
-            st.markdown("---")
-            
-            # --- القسم الثاني: تحليل الأخبار والمشاعر ---
-            st.subheader("📰 أحدث الأخبار وتأثيرها المتوقع:")
-            
-            if news_data:
-                for article in news_data:
-                    sentiment = analyze_news_sentiment(article['title'])
-                    st.markdown(f"**التأثير:** {sentiment} | [{article['title']}]({article['url']})")
-            else:
-                st.info("لا توجد أخبار متاحة لهذا الرمز في الوقت الحالي.")
+                st.subheader("📊 حالة السوق:")
+                st.write(f"**نقطة الدعم (شراء):** ${sup:,.2f} | **نقطة المقاومة (بيع):** ${res:,.2f}")
                 
-            st.markdown("---")
-            st.caption("ملاحظة هامة: هذا الموقع أداة مساعدة تعتمد على خوارزميات برمجية. تداول بمسؤولية.")
-        else:
-            st.error("❌ عذراً، لم نتمكن من جلب البيانات. تأكد من صحة الرمز (مثال للأسهم: AAPL، للعملات: BTC/USDT).")
-    else:
-        st.warning("الرجاء إدخال الرمز أولاً.")
+                st.subheader("📰 أحدث الأخبار:")
+                if news:
+                    for item in news:
+                        st.markdown(f"{analyze_news_sentiment(item['title'])} | [{item['title']}]({item['link']})")
+                else: st.info("لا توجد أخبار حالياً.")
+            else: st.error("تأكد من صحة الرمز.")
+
+with col_ads:
+    st.subheader("إعلانات 📢")
+    st.markdown("""
+        <div style="background-color: #262730; padding: 20px; border-radius: 10px; height: 500px; color: white;">
+            <p><script>
+  atOptions = {
+    'key' : '04e5cc65f1f9df82e44cdac786768a40',
+    'format' : 'iframe',
+    'height' : 250,
+    'width' : 300,
+    'params' : {}
+  };
+</script>
+<script src="https://www.highperformanceformat.com/04e5cc65f1f9df82e44cdac786768a40/invoke.js"></script>
+</p>
+            <p style="font-size: 0.8em; color: gray;">ضع كود الإعلان الخاص بك هنا</p>
+        </div>
+    """, unsafe_allow_html=True)
