@@ -4,8 +4,8 @@ import ta
 from textblob import TextBlob
 import yfinance as yf
 
-# إعداد الصفحة
-st.set_page_config(page_title="المحلل الذكي الشامل", layout="centered")
+# إعداد الصفحة لتكون واسعة لتستوعب الإعلان الجانبي
+st.set_page_config(page_title="المحلل الذكي الشامل", layout="wide")
 
 # --- 1. البنر العلوي ---
 st.markdown("""
@@ -30,35 +30,54 @@ def analyze_technical(df):
     bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
     return df['close'].iloc[-1], rsi.iloc[-1], bb.bollinger_lband().iloc[-1], bb.bollinger_hband().iloc[-1]
 
-# --- الواجهة الرئيسية مع القوائم المنسدلة ---
-st.title("🚀 المحلل الذكي الشامل")
+def get_market_news(symbol):
+    """إصلاح دالة جلب الأخبار"""
+    try:
+        ticker = yf.Ticker(symbol)
+        news = ticker.news
+        if not news: return None
+        # تصفية الأخبار للتأكد من وجود عناوين وروابط
+        return [{'title': i.get('title'), 'link': i.get('link', '#')} for i in news if i.get('title')]
+    except: return None
 
-market_type = st.selectbox("اختر نوع السوق:", ["العملات الرقمية 🪙", "الأسهم العالمية 🏢"])
+# --- تقسيم الصفحة ---
+col_main, col_ads = st.columns([3, 1])
 
-# تعريف القوائم المنسدلة للأصول
-if market_type == "العملات الرقمية 🪙":
-    symbol = st.selectbox("اختر العملة:", ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "BNB-USD"])
-else:
-    symbol = st.selectbox("اختر الشركة:", ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "GOOGL"])
+with col_main:
+    st.title("🚀 المحلل الذكي الشامل")
+    market_type = st.selectbox("اختر نوع السوق:", ["العملات الرقمية 🪙", "الأسهم العالمية 🏢"])
+    
+    # القوائم المنسدلة للرموز
+    if market_type == "العملات الرقمية 🪙":
+        symbol = st.selectbox("اختر العملة:", ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "BNB-USD"])
+    else:
+        symbol = st.selectbox("اختر الشركة:", ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "GOOGL"])
 
-if st.button("بدء التحليل الفني 🔍"):
-    with st.spinner('جاري معالجة البيانات...'):
-        df = get_market_data(symbol)
-        
-        if df is not None:
-            price, rsi, sup, res = analyze_technical(df)
-            c1, c2 = st.columns(2)
-            c1.metric("السعر الحالي", f"${price:,.2f}")
-            c2.metric("مؤشر RSI", f"{rsi:.2f}")
+    if st.button("بدء التحليل الفني 🔍"):
+        with st.spinner('جاري التحليل...'):
+            df = get_market_data(symbol)
+            news = get_market_news(symbol)
             
-            st.subheader("📊 حالة السوق الفنية:")
-            if rsi <= 30: st.success("الأصل في قاع (تشبع بيعي) 🟢")
-            elif rsi >= 70: st.error("الأصل في قمة (تشبع شرائي) 🔴")
-            else: st.warning("السعر في مسار محايد ⚪")
-            
-            st.markdown("---")
-            st.subheader("🎯 أقرب نقاط الدخول المقترحة:")
-            st.write(f"**🟢 نقطة الدعم (شراء):** ${sup:,.2f}")
-            st.write(f"**🔴 نقطة المقاومة (بيع):** ${res:,.2f}")
-        else:
-            st.error("عذراً، لم نتمكن من جلب بيانات لهذا الرمز.")
+            if df is not None:
+                price, rsi, sup, res = analyze_technical(df)
+                c1, c2 = st.columns(2)
+                c1.metric("السعر الحالي", f"${price:,.2f}")
+                c2.metric("مؤشر RSI", f"{rsi:.2f}")
+                
+                st.subheader("🎯 نقاط الدخول:")
+                st.write(f"🟢 **دعم:** ${sup:,.2f} | 🔴 **مقاومة:** ${res:,.2f}")
+                
+                st.subheader("📰 أحدث الأخبار الاقتصادية:")
+                if news:
+                    for item in news[:5]: # عرض أول 5 أخبار
+                        st.markdown(f"🔗 [{item['title']}]({item['link']})")
+                else: st.warning("لا توجد أخبار اقتصادية متاحة حالياً لهذا الرمز.")
+            else: st.error("فشل في جلب البيانات.")
+
+with col_ads:
+    st.subheader("📢 إعلانات")
+    st.markdown("""
+        <div style="background-color: #1e1e1e; border: 1px dashed #444; padding: 20px; border-radius: 10px; height: 500px; color: #888; text-align: center;">
+            <p>ضع كود الإعلان الجانبي هنا</p>
+        </div>
+    """, unsafe_allow_html=True)
