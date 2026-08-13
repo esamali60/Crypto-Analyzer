@@ -4,13 +4,13 @@ import ta
 from textblob import TextBlob
 import yfinance as yf
 
-# إعداد الصفحة لتكون واسعة لتستوعب الإعلان الجانبي
+# إعداد الصفحة لتكون واسعة
 st.set_page_config(page_title="المحلل الذكي الشامل", layout="wide")
 
 # --- 1. البنر العلوي ---
 st.markdown("""
     <div style="background-color: #1e1e1e; border: 1px dashed #444; padding: 15px; text-align: center; border-radius: 10px; margin-bottom: 20px;">
-        <p style="color: #888; font-size: 14px; margin: 0;"><script> atOptions = { 'key' : '9a374e1ba3c8e64316b7e2eb29f45a7a', 'format' : 'iframe', 'height' : 90, 'width' : 728, 'params' : {} }; </script> <script src="https://www.highperformanceformat.com/9a374e1ba3c8e64316b7e2eb29f45a7a/invoke.js"></script></p>
+        <p style="color: #888; font-size: 14px; margin: 0;">مساحة إعلانية علوية</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -31,12 +31,10 @@ def analyze_technical(df):
     return df['close'].iloc[-1], rsi.iloc[-1], bb.bollinger_lband().iloc[-1], bb.bollinger_hband().iloc[-1]
 
 def get_market_news(symbol):
-    """إصلاح دالة جلب الأخبار"""
     try:
         ticker = yf.Ticker(symbol)
         news = ticker.news
         if not news: return None
-        # تصفية الأخبار للتأكد من وجود عناوين وروابط
         return [{'title': i.get('title'), 'link': i.get('link', '#')} for i in news if i.get('title')]
     except: return None
 
@@ -47,7 +45,6 @@ with col_main:
     st.title("🚀 المحلل الذكي الشامل")
     market_type = st.selectbox("اختر نوع السوق:", ["العملات الرقمية 🪙", "الأسهم العالمية 🏢"])
     
-    # القوائم المنسدلة للرموز
     if market_type == "العملات الرقمية 🪙":
         symbol = st.selectbox("اختر العملة:", ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "BNB-USD"])
     else:
@@ -64,20 +61,22 @@ with col_main:
                 c1.metric("السعر الحالي", f"${price:,.2f}")
                 c2.metric("مؤشر RSI", f"{rsi:.2f}")
                 
-                st.subheader("🎯 نقاط الدخول:")
-                st.write(f"🟢 **دعم:** ${sup:,.2f} | 🔴 **مقاومة:** ${res:,.2f}")
+                # --- تعديل نقاط الدخول لتظهر أسفل بعضها ---
+                st.subheader("🎯 أقرب نقاط الدخول المقترحة:")
+                st.write(f"🟢 **نقطة الدخول شراء (دعم):** ${sup:,.2f}")
+                st.write(f"🔴 **نقطة الدخول بيع (مقاومة):** ${res:,.2f}")
                 
                 st.subheader("📰 أحدث الأخبار الاقتصادية:")
                 if news:
-                    for item in news[:5]: # عرض أول 5 أخبار
+                    for item in news[:5]:
                         st.markdown(f"🔗 [{item['title']}]({item['link']})")
-                else: st.warning("لا توجد أخبار اقتصادية متاحة حالياً لهذا الرمز.")
+                else: st.warning("لا توجد أخبار اقتصادية متاحة حالياً.")
             else: st.error("فشل في جلب البيانات.")
 
 with col_ads:
     st.subheader("📢 إعلانات")
     st.markdown("""
         <div style="background-color: #1e1e1e; border: 1px dashed #444; padding: 20px; border-radius: 10px; height: 500px; color: #888; text-align: center;">
-            <p><script> atOptions = { 'key' : '04e5cc65f1f9df82e44cdac786768a40', 'format' : 'iframe', 'height' : 200, 'width' : 300, 'params' : {} }; </script> <script src="https://www.highperformanceformat.com/04e5cc65f1f9df82e44cdac786768a40/invoke.js"></script></p>
+            <p>ضع كود الإعلان الجانبي هنا</p>
         </div>
     """, unsafe_allow_html=True)
