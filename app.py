@@ -19,7 +19,7 @@ def get_crypto_data(symbol, timeframe="1hour"):
         data = response.json()
         if data.get('code') != '200000' or not data.get('data'): return None
         df = pd.DataFrame(data['data'], columns=['time', 'open', 'close', 'high', 'low', 'volume', 'turnover'])
-        df['close'] = df['close'].astype(float)
+        df['close'] = df['close'].astype(format=None, errors='ignore').astype(float)
         return df.iloc[::-1].reset_index(drop=True)
     except: return None
 
@@ -43,10 +43,16 @@ def analyze_technical(df):
 
 # --- دالة تحليل مشاعر الأخبار (الذكاء الاصطناعي) ---
 def analyze_news_sentiment(text):
-    pol = TextBlob(text).sentiment.polarity
-    if pol > 0.1: return "إيجابي 🟢"
-    elif pol < -0.1: return "سلبي 🔴"
-    return "محايد ⚪"
+    try:
+        # التأكد من أن النص عبارة عن سلسلة نصية صحيحة وليست فارغة
+        if not text or not isinstance(text, str):
+            return "محايد ⚪"
+        pol = TextBlob(text).sentiment.polarity
+        if pol > 0.05: return "إيجابي 🟢"
+        elif pol < -0.05: return "سلبي 🔴"
+        return "محايد ⚪"
+    except:
+        return "محايد ⚪"
 
 # --- دوال جلب الأخبار ---
 def get_crypto_news():
@@ -54,13 +60,28 @@ def get_crypto_news():
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         res = requests.get(url, headers=headers).json()
-        return [{'title': i['title'], 'url': i['url']} for i in res.get('Data', [])[:5]]
+        articles = res.get('Data', [])
+        news_list = []
+        for i in articles:
+            title = i.get('title')
+            url_link = i.get('url')
+            if title and url_link:
+                news_list.append({'title': str(title), 'url': str(url_link)})
+        return news_list[:5] if news_list else None
     except: return None
 
 def get_stock_news(symbol):
     try:
-        news = yf.Ticker(symbol.upper()).news
-        return [{'title': i.get('title'), 'url': i.get('link')} for i in news[:5]]
+        ticker = yf.Ticker(symbol.upper())
+        news = ticker.news
+        news_list = []
+        if news and isinstance(news, list):
+            for i in news:
+                title = i.get('title')
+                link = i.get('link', '#')
+                if title:
+                    news_list.append({'title': str(title), 'url': str(link)})
+        return news_list[:5] if news_list else None
     except: return None
 
 # --- واجهة الموقع ---
@@ -82,15 +103,26 @@ if st.button("تحليل شامل الآن 🔍"):
             col2.metric("مؤشر RSI", f"{rsi:.2f}")
             
             st.subheader("📊 حالة السوق الفنية:")
-            if rsi <= 30: st.success("تشبع بيعي - احتمالية الصعود أعلى 🟢")
-            elif rsi >= 70: st.error("تشبع شرائي - احتمالية الهبوط أعلى 🔴")
-            else: st.warning("السعر في مسار محايد ⚪")
+            if rsi <= 30: 
+                st.success("العملة في قاع (تشبع بيعي) - احتمالية الصعود أعلى 🟢")
+            elif rsi >= 70: 
+                st.error("العملة في قمة (تشبع شرائي) - احتمالية الهبوط أعلى 🔴")
+            else: 
+                st.warning("السعر في مسار محايد ومستقر ⚪")
             
-            st.write(f"**نقطة الدخول شراء (دعم):** ${sup:,.2f} | **نقطة الدخول بيع (مقاومة):** ${res:,.2f}")
+            # --- العرض المنظم لنقاط الدخول كما طلبت ---
+            st.markdown("---")
+            st.subheader("🎯 أقرب نقاط الدخول المقترحة:")
+            st.write(f"**🟢 نقطة الدخول شراء (صعود - دعم):** بالقرب من مستوى السعر **${sup:,.2f}**")
+            st.write(f"**🔴 نقطة الدخول بيع (هبوط - مقاومة):** بالقرب من مستوى السعر **${res:,.2f}**")
             
+            st.markdown("---")
             st.subheader("📰 أحدث الأخبار وتأثيرها:")
             if news:
                 for item in news:
-                    st.markdown(f"{analyze_news_sentiment(item['title'])} | [{item['title']}]({item['url']})")
-            else: st.info("لا توجد أخبار متوفرة لهذا الرمز حالياً.")
-        else: st.error("عذراً، لم نتمكن من جلب بيانات لهذا الرمز. يرجى التأكد من كتابته بشكل صحيح.")
+                    sentiment = analyze_news_sentiment(item['title'])
+                    st.markdown(f"**التأثير:** {sentiment} | [{item['title']}]({item['url']})")
+            else: 
+                st.info("لا توجد أخبار متوفرة لهذا الرمز حالياً.")
+        else: 
+            st.error("عذراً، لم نتمكن من جلب بيانات لهذا الرمز. يرجى التأكد من كتابته بشكل صحيح.")
