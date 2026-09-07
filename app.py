@@ -20,6 +20,7 @@ st.markdown("""
 
 # --- الدوال البرمجية لجلب وتحليل البيانات ---
 def get_market_data(symbol):
+    """دالة لجلب بيانات التاريخ السعري للأصل من مكتبة yfinance"""
     try:
         ticker = yf.Ticker(symbol.strip().upper())
         df = ticker.history(period="1mo", interval="1h")
@@ -30,11 +31,13 @@ def get_market_data(symbol):
     except: return None
 
 def analyze_technical(df):
+    """دالة لحساب مؤشر القوة النسبية RSI وبولينجر باند ونقاط الدعم والمقاومة"""
     rsi = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
     bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
     return df['close'].iloc[-1], rsi.iloc[-1], bb.bollinger_lband().iloc[-1], bb.bollinger_hband().iloc[-1]
 
 def get_market_news(symbol):
+    """دالة لجلب آخر الأخبار الاقتصادية المرتبطة بالرمز"""
     try:
         ticker = yf.Ticker(symbol.strip().upper())
         news = ticker.news
@@ -43,6 +46,7 @@ def get_market_news(symbol):
     except: return None
 
 def get_trading_recommendation(price, rsi, sup, res):
+    """دالة تحليل ذكية لإعطاء توصية شراء، بيع أو انتظار بناءً على المؤشرات"""
     if rsi <= 30:
         trend = "صاعد (فرصة ارتداد من القاع)"
         advice = "🟢 **التوصية:** الشراء الآن (السعر في منطقة تشبع بيعي، وهناك احتمالية قوية للصعود)."
@@ -73,8 +77,7 @@ with col_main:
     else:
         options = ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "GOOGL", "META", "NFLX"]
 
-    # --- تنظيم طريقة الإدخال لمنع التشتيت والحيرة ---
-    # نضع خياراً نظيفاً يحدد طريقة الإدخال (من القائمة أو كتابة يدوية)
+    # تنظيم طريقة الإدخال لمنع التشتيت
     input_method = st.radio("اختر طريقتك لتحديد الأصل:", ["اختيار من القائمة الجاهزة 📋", "كتابة الرمز يدوياً ✍️"], horizontal=True)
 
     if input_method == "اختيار من القائمة الجاهزة 📋":
@@ -83,9 +86,14 @@ with col_main:
         manual_text = st.text_input("اكتب رمز الأصل بنفسك (مثال: AVAX-USD أو 2222.SR):", "")
         final_symbol = manual_text.strip().upper() if manual_text.strip() != "" else options[0]
 
-    st.info(f"📊 جارٍ تحليل الأصل الحالي: **{final_symbol}** (تحديث تلقائي لحظي)")
+    # --- إضافة زر التحديث المباشر بجوار معلومات الحالة ---
+    col_status, col_btn = st.columns([3, 1])
+    with col_status:
+        st.info(f"📊 جارٍ تحليل الأصل الحالي: **{final_symbol}** (تحديث تلقائي كل دقيقة)")
+    with col_btn:
+        manual_refresh_btn = st.button("🔄 تحديث مباشر")
 
-    # تنفيذ جلب البيانات وعرضها
+    # تنفيذ جلب البيانات وعرضها (سواء بالتحديث التلقائي أو بضغط زر التحديث المباشر)
     if final_symbol:
         with st.spinner('جاري جلب بيانات السوق وتحديث التحليل الفني...'):
             df = get_market_data(final_symbol)
@@ -130,4 +138,3 @@ with col_ads:
             <p style="margin-top: 200px;">ضع كود الإعلان الجانبي هنا</p>
         </div>
     """, unsafe_allow_html=True)
-    
