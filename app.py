@@ -3,11 +3,17 @@ import pandas as pd
 import ta
 from textblob import TextBlob
 import yfinance as yf
+from streamlit_autorefresh import st_autorefresh
 
 # إعداد الصفحة لتكون واسعة
 st.set_page_config(page_title="المحلل الذكي الشامل", layout="wide")
 
-# --- 1. البنر العلوي للإعلانات ---
+# --- 1. تفعيل التحديث التلقائي ---
+# هنا قمنا بضبط التحديث تلقائياً كل 60 ثانية (60000 جزء من الألف من الثانية)
+# يمكنك تعديل الرقم حسب رغبتك (مثلاً 30000 تعني كل 30 ثانية)
+count = st_autorefresh(interval=60000, limit=None, key="market_autorefresh")
+
+# --- 2. البنر العلوي للإعلانات ---
 st.markdown("""
     <div style="background-color: #1e1e1e; border: 1px dashed #444; padding: 15px; text-align: center; border-radius: 10px; margin-bottom: 20px;">
         <p style="color: #888; font-size: 14px; margin: 0;">مساحة إعلانية علوية</p>
@@ -50,7 +56,6 @@ def get_trading_recommendation(price, rsi, sup, res):
         trend = "هابط (تصحيح محتمل من القمة)"
         advice = "🔴 **التوصية:** البيع أو جني الأرباح الآن (السعر في منطقة تشبع شرائي، وقد يسببه هبوط قريب)."
     else:
-        # إذا كان السعر في المنتصف، نقارن قربه من الدعم أو المقاومة
         if abs(price - sup) < abs(price - res):
             trend = "محايد يميل للصعود تدريجياً"
             advice = f"🟡 **التوصية:** الانتظار قليلاً أو الشراء بحذر عند الاقتراب من نقطة الدعم (${sup:,.2f})."
@@ -64,7 +69,7 @@ def get_trading_recommendation(price, rsi, sup, res):
 col_main, col_ads = st.columns([3, 1])
 
 with col_main:
-    st.title("🚀 المحلل الذكي الشامل")
+    st.title("🚀 المحلل الذكي الشامل (تحديث لحظي)")
     
     # اختيار السوق
     market_type = st.radio("اختر نوع السوق:", ["العملات الرقمية 🪙", "الأسهم العالمية 🏢"], horizontal=True)
@@ -87,44 +92,44 @@ with col_main:
     else:
         final_symbol = selected_from_list
 
-    st.write(f"الرمز المختار حالياً للتحليل: **{final_symbol}**")
+    st.write(f"الرمز المختار حالياً للتحليل: **{final_symbol}** (يتم التحديث تلقائياً كل دقيقة ⏱️)")
 
-    if st.button("بدء التحليل الفني الشامل 🔍"):
-        with st.spinner('جاري جلب البيانات وتحليل اتجاه السوق...'):
-            df = get_market_data(final_symbol)
-            news = get_market_news(final_symbol)
+    # جلب البيانات وعرضها مباشرة (بدون الحاجة لضغط زر)
+    with st.spinner('جاري جلب البيانات وتحديث السوق لحظياً...'):
+        df = get_market_data(final_symbol)
+        news = get_market_news(final_symbol)
+        
+        if df is not None:
+            price, rsi, sup, res = analyze_technical(df)
+            trend, advice = get_trading_recommendation(price, rsi, sup, res)
             
-            if df is not None:
-                price, rsi, sup, res = analyze_technical(df)
-                trend, advice = get_trading_recommendation(price, rsi, sup, res)
-                
-                # عرض السعر ومؤشر RSI
-                c1, c2 = st.columns(2)
-                c1.metric("السعر الحالي", f"${price:,.2f}")
-                c2.metric("مؤشر RSI", f"{rsi:.2f}")
-                
-                # --- إضافة النبذة والتوصية التلقائية هنا ---
-                st.markdown("---")
-                st.subheader("💡 النبذة والتوصية الذكية:")
-                st.write(f"📈 **حالة الاتجاه:** {trend}")
-                st.markdown(advice)
-                
-                # عرض نقاط الدخول بوضوح أسفل بعضها
-                st.markdown("---")
-                st.subheader("🎯 أقرب نقاط الدخول المقترحة:")
-                st.write(f"🟢 **نقطة الدخول شراء (دعم):** ${sup:,.2f}")
-                st.write(f"🔴 **نقطة الدخول بيع (مقاومة):** ${res:,.2f}")
-                
-                # عرض الأخبار الاقتصادية
-                st.markdown("---")
-                st.subheader("📰 أحدث الأخبار الاقتصادية:")
-                if news:
-                    for item in news[:5]:
-                        st.markdown(f"🔗 [{item['title']}]({item['link']})")
-                else: 
-                    st.warning("لا توجد أخبار اقتصادية متاحة حالياً لهذا الرمز.")
+            # عرض السعر ومؤشر RSI
+            c1, c2 = st.columns(2)
+            c1.metric("السعر الحالي", f"${price:,.2f}")
+            c2.metric("مؤشر RSI", f"{rsi:.2f}")
+            
+            # عرض النبذة والتوصية الذكية
+            st.markdown("---")
+            st.subheader("💡 النبذة والتوصية الذكية (تحديث مباشر):")
+            st.write(f"📈 **حالة الاتجاه:** {trend}")
+            st.markdown(advice)
+            
+            # عرض نقاط الدخول بوضوح أسفل بعضها
+            st.markdown("---")
+            st.subheader("🎯 أقرب نقاط الدخول المقترحة:")
+            st.write(f"🟢 **نقطة الدخول شراء (دعم):** ${sup:,.2f}")
+            st.write(f"🔴 **نقطة الدخول بيع (مقاومة):** ${res:,.2f}")
+            
+            # عرض الأخبار الاقتصادية
+            st.markdown("---")
+            st.subheader("📰 أحدث الأخبار الاقتصادية:")
+            if news:
+                for item in news[:5]:
+                    st.markdown(f"🔗 [{item['title']}]({item['link']})")
             else: 
-                st.error(f"عذراً، لم نتمكن من العثور على بيانات للرمز ({final_symbol}). تأكد من كتابته بشكل صحيح.")
+                st.warning("لا توجد أخبار اقتصادية متاحة حالياً لهذا الرمز.")
+        else: 
+            st.error(f"عذراً، لم نتمكن من العثور على بيانات للرمز ({final_symbol}). تأكد من صحة كتابته.")
 
 with col_ads:
     st.subheader("📢 إعلانات")
