@@ -5,13 +5,13 @@ from textblob import TextBlob
 import yfinance as yf
 from streamlit_autorefresh import st_autorefresh
 
-# إعداد الصفحة لتكون واسعة
+# 1. إعداد الصفحة لتكون واسعة
 st.set_page_config(page_title="المحلل الذكي الشامل", layout="wide")
 
-# --- 1. التحديث التلقائي (كل 60 ثانية) ---
+# 2. التحديث التلقائي (كل 60 ثانية)
 st_autorefresh(interval=60000, limit=None, key="market_refresh")
 
-# --- 2. البنر العلوي للإعلانات ---
+# 3. البنر العلوي للإعلانات
 st.markdown("""
     <div style="background-color: #1e1e1e; border: 1px dashed #444; padding: 15px; text-align: center; border-radius: 10px; margin-bottom: 20px;">
         <p style="color: #888; font-size: 14px; margin: 0;">مساحة إعلانية علوية</p>
@@ -64,66 +64,64 @@ col_main, col_ads = st.columns([3, 1])
 with col_main:
     st.title("🚀 المحلل الذكي الشامل للأسواق")
     
-    # اختيار نوع السوق
-    market_type = st.radio("اختر نوع السوق:", ["العملات الرقمية 🪙", "الأسهم العالمية 🏢"], horizontal=True)
+    # اختيار نوع السوق (عملات رقمية أم أسهم)
+    market_type = st.radio("اختر نوع السوق الأساسي:", ["العملات الرقمية 🪙", "الأسهم العالمية 🏢"], horizontal=True)
     
-    # تجهيز القوائم المنسدلة حسب السوق المختار
+    # تحديد القوائم الجاهزة حسب السوق
     if market_type == "العملات الرقمية 🪙":
         options = ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "BNB-USD", "XRP-USD", "DOGE-USD"]
     else:
         options = ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "GOOGL", "META", "NFLX"]
 
-    # صندوق اختيار من القائمة أو كتابة يدوية
-    col_input1, col_input2 = st.columns(2)
-    with col_input1:
-        selected_dropdown = st.selectbox("اختر من القائمة الجاهزة:", options)
-    with col_input2:
-        manual_text = st.text_input("أو اكتب الرمز يدوياً (مثال: AVAX-USD):", "")
+    # --- تنظيم طريقة الإدخال لمنع التشتيت والحيرة ---
+    # نضع خياراً نظيفاً يحدد طريقة الإدخال (من القائمة أو كتابة يدوية)
+    input_method = st.radio("اختر طريقتك لتحديد الأصل:", ["اختيار من القائمة الجاهزة 📋", "كتابة الرمز يدوياً ✍️"], horizontal=True)
 
-    # معالجة الرمز النهائي المستخدم في التحليل
-    if manual_text.strip() != "":
-        final_symbol = manual_text.strip().upper()
+    if input_method == "اختيار من القائمة الجاهزة 📋":
+        final_symbol = st.selectbox("اختر العملة أو السهم:", options)
     else:
-        final_symbol = selected_dropdown
+        manual_text = st.text_input("اكتب رمز الأصل بنفسك (مثال: AVAX-USD أو 2222.SR):", "")
+        final_symbol = manual_text.strip().upper() if manual_text.strip() != "" else options[0]
 
-    st.info(f"📊 جارٍ تحليل الأصل الحالي: **{final_symbol}** (تحديث تلقائي كل دقيقة)")
+    st.info(f"📊 جارٍ تحليل الأصل الحالي: **{final_symbol}** (تحديث تلقائي لحظي)")
 
-    # تنفيذ جلب البيانات وعرضها مباشرة
-    with st.spinner('جاري جلب بيانات السوق وتحليل المؤشرات...'):
-        df = get_market_data(final_symbol)
-        news = get_market_news(final_symbol)
-        
-        if df is not None:
-            price, rsi, sup, res = analyze_technical(df)
-            trend, advice = get_trading_recommendation(price, rsi, sup, res)
+    # تنفيذ جلب البيانات وعرضها
+    if final_symbol:
+        with st.spinner('جاري جلب بيانات السوق وتحديث التحليل الفني...'):
+            df = get_market_data(final_symbol)
+            news = get_market_news(final_symbol)
             
-            # عرض السعر ومؤشر RSI في أعمدة مترابطة
-            c1, c2 = st.columns(2)
-            c1.metric("السعر الحالي", f"${price:,.2f}")
-            c2.metric("مؤشر RSI", f"{rsi:.2f}")
-            
-            # عرض التوصية الذكية
-            st.markdown("---")
-            st.subheader("💡 النبذة والتوصية الذكية:")
-            st.write(f"📈 **حالة الاتجاه:** {trend}")
-            st.markdown(advice)
-            
-            # عرض نقاط الدخول في أسطر منفصلة وواضحة
-            st.markdown("---")
-            st.subheader("🎯 أقرب نقاط الدخول المقترحة:")
-            st.write(f"🟢 **نقطة الدخول شراء (دعم):** ${sup:,.2f}")
-            st.write(f"🔴 **نقطة الدخول بيع (مقاومة):** ${res:,.2f}")
-            
-            # عرض الأخبار الاقتصادية
-            st.markdown("---")
-            st.subheader("📰 أحدث الأخبار الاقتصادية:")
-            if news:
-                for item in news[:5]:
-                    st.markdown(f"🔗 [{item['title']}]({item['link']})")
+            if df is not None:
+                price, rsi, sup, res = analyze_technical(df)
+                trend, advice = get_trading_recommendation(price, rsi, sup, res)
+                
+                # عرض السعر ومؤشر RSI
+                c1, c2 = st.columns(2)
+                c1.metric("السعر الحالي", f"${price:,.2f}")
+                c2.metric("مؤشر RSI", f"{rsi:.2f}")
+                
+                # عرض التوصية الذكية
+                st.markdown("---")
+                st.subheader("💡 النبذة والتوصية الذكية:")
+                st.write(f"📈 **حالة الاتجاه:** {trend}")
+                st.markdown(advice)
+                
+                # عرض نقاط الدخول المقترحة
+                st.markdown("---")
+                st.subheader("🎯 أقرب نقاط الدخول المقترحة:")
+                st.write(f"🟢 **نقطة الدخول شراء (دعم):** ${sup:,.2f}")
+                st.write(f"🔴 **نقطة الدخول بيع (مقاومة):** ${res:,.2f}")
+                
+                # عرض الأخبار الاقتصادية
+                st.markdown("---")
+                st.subheader("📰 أحدث الأخبار الاقتصادية:")
+                if news:
+                    for item in news[:5]:
+                        st.markdown(f"🔗 [{item['title']}]({item['link']})")
+                else:
+                    st.warning("لا توجد أخبار اقتصادية متاحة حالياً لهذا الرمز.")
             else:
-                st.warning("لا توجد أخبار اقتصادية متاحة حالياً لهذا الرمز.")
-        else:
-            st.error(f"عذراً، لم نتمكن من جلب بيانات للرمز ({final_symbol}). تأكد من كتابة الرمز بشكل صحيح (مثل إضافة -USD للعملات الرقمية).")
+                st.error(f"عذراً، لم نتمكن من جلب بيانات للرمز ({final_symbol}). تأكد من صحة كتابة الرمز.")
 
 with col_ads:
     st.subheader("📢 إعلانات")
@@ -132,3 +130,4 @@ with col_ads:
             <p style="margin-top: 200px;">ضع كود الإعلان الجانبي هنا</p>
         </div>
     """, unsafe_allow_html=True)
+    
