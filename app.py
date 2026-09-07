@@ -10,7 +10,7 @@ st.set_page_config(page_title="المحلل الذكي الشامل", layout="wi
 # --- 1. البنر العلوي للإعلانات ---
 st.markdown("""
     <div style="background-color: #1e1e1e; border: 1px dashed #444; padding: 15px; text-align: center; border-radius: 10px; margin-bottom: 20px;">
-        <p style="color: #888; font-size: 14px; margin: 0;"><script> atOptions = { 'key' : '9a374e1ba3c8e64316b7e2eb29f45a7a', 'format' : 'iframe', 'height' : 90, 'width' : 728, 'params' : {} }; </script> <script src="https://www.highperformanceformat.com/9a374e1ba3c8e64316b7e2eb29f45a7a/invoke.js"></script></p>
+        <p style="color: #888; font-size: 14px; margin: 0;">مساحة إعلانية علوية</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -41,6 +41,25 @@ def get_market_news(symbol):
         return [{'title': i.get('title'), 'link': i.get('link', '#')} for i in news if i.get('title')]
     except: return None
 
+def get_trading_recommendation(price, rsi, sup, res):
+    """دالة ذكية لتحديد اتجاه السعر وإعطاء توصية (شراء، بيع، انتظار)"""
+    if rsi <= 30:
+        trend = "صاعد (فرصة ارتداد من القاع)"
+        advice = "🟢 **التوصية:** الشراء الآن (السعر في منطقة تشبع بيعي، وهناك احتمالية قوية للصعود)."
+    elif rsi >= 70:
+        trend = "هابط (تصحيح محتمل من القمة)"
+        advice = "🔴 **التوصية:** البيع أو جني الأرباح الآن (السعر في منطقة تشبع شرائي، وقد يسببه هبوط قريب)."
+    else:
+        # إذا كان السعر في المنتصف، نقارن قربه من الدعم أو المقاومة
+        if abs(price - sup) < abs(price - res):
+            trend = "محايد يميل للصعود تدريجياً"
+            advice = f"🟡 **التوصية:** الانتظار قليلاً أو الشراء بحذر عند الاقتراب من نقطة الدعم (${sup:,.2f})."
+        else:
+            trend = "محايد يميل للهبوط أو التذبذب"
+            advice = f"🟡 **التوصية:** الانتظار حتى يهبط السعر نحو الدعم (${sup:,.2f}) أو تجنب الشراء حالياً لقربه من المقاومة."
+    
+    return trend, advice
+
 # --- تقسيم الصفحة إلى عمودين (الرئيسي والإعلاني) ---
 col_main, col_ads = st.columns([3, 1])
 
@@ -58,14 +77,11 @@ with col_main:
         list_options = ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "GOOGL", "META"]
         default_idx = 0
 
-    # استخدام طريقتين منفصلتين وواضحتين تماماً لتجنب التعارض:
-    # 1. القائمة المنسدلة السريعة
+    # القائمة المنسدلة والخانة اليدوية
     selected_from_list = st.selectbox("1️⃣ أو اختر من القائمة الجاهزة:", list_options, index=default_idx)
-    
-    # 2. خانة الإدخال اليدوي الحر (إذا كتب فيها المستخدم شيئاً، ستلغي القائمة تلقائياً)
     manual_input = st.text_input("2️⃣ أو اكتب رمز الأصل بنفسك (مثال: DOGE-USD أو MSFT):", "")
 
-    # تحديد أي الرمزين سيتم اعتماده في التحليل
+    # تحديد الرمز النهائي
     if manual_input.strip() != "":
         final_symbol = manual_input.strip().upper()
     else:
@@ -74,27 +90,32 @@ with col_main:
     st.write(f"الرمز المختار حالياً للتحليل: **{final_symbol}**")
 
     if st.button("بدء التحليل الفني الشامل 🔍"):
-        with st.spinner('جاري جلب البيانات ومعالجة السوق...'):
+        with st.spinner('جاري جلب البيانات وتحليل اتجاه السوق...'):
             df = get_market_data(final_symbol)
             news = get_market_news(final_symbol)
             
             if df is not None:
                 price, rsi, sup, res = analyze_technical(df)
+                trend, advice = get_trading_recommendation(price, rsi, sup, res)
                 
+                # عرض السعر ومؤشر RSI
                 c1, c2 = st.columns(2)
                 c1.metric("السعر الحالي", f"${price:,.2f}")
                 c2.metric("مؤشر RSI", f"{rsi:.2f}")
                 
-                st.subheader("📊 حالة السوق الفنية:")
-                if rsi <= 30: st.success("الأصل في قاع (تشبع بيعي) - احتمالية الصعود أعلى 🟢")
-                elif rsi >= 70: st.error("الأصل في قمة (تشبع شرائي) - احتمالية الهبوط أعلى 🔴")
-                else: st.warning("السعر في مسار محايد ومستقر ⚪")
+                # --- إضافة النبذة والتوصية التلقائية هنا ---
+                st.markdown("---")
+                st.subheader("💡 النبذة والتوصية الذكية:")
+                st.write(f"📈 **حالة الاتجاه:** {trend}")
+                st.markdown(advice)
                 
+                # عرض نقاط الدخول بوضوح أسفل بعضها
                 st.markdown("---")
                 st.subheader("🎯 أقرب نقاط الدخول المقترحة:")
                 st.write(f"🟢 **نقطة الدخول شراء (دعم):** ${sup:,.2f}")
                 st.write(f"🔴 **نقطة الدخول بيع (مقاومة):** ${res:,.2f}")
                 
+                # عرض الأخبار الاقتصادية
                 st.markdown("---")
                 st.subheader("📰 أحدث الأخبار الاقتصادية:")
                 if news:
@@ -103,12 +124,12 @@ with col_main:
                 else: 
                     st.warning("لا توجد أخبار اقتصادية متاحة حالياً لهذا الرمز.")
             else: 
-                st.error(f"عذراً، لم نتمكن من العثور على بيانات للرمز ({final_symbol}). تأكد من صحة كتابته (مثلاً العملات تنتهي بـ -USD مثل SOL-USD).")
+                st.error(f"عذراً، لم نتمكن من العثور على بيانات للرمز ({final_symbol}). تأكد من كتابته بشكل صحيح.")
 
 with col_ads:
     st.subheader("📢 إعلانات")
     st.markdown("""
         <div style="background-color: #1e1e1e; border: 1px dashed #444; padding: 20px; border-radius: 10px; height: 500px; color: #888; text-align: center;">
-            <p style="margin-top: 200px;"><script> atOptions = { 'key' : '04e5cc65f1f9df82e44cdac786768a40', 'format' : 'iframe', 'height' : 250, 'width' : 300, 'params' : {} }; </script> <script src="https://www.highperformanceformat.com/04e5cc65f1f9df82e44cdac786768a40/invoke.js"></script></p>
+            <p style="margin-top: 200px;">ضع كود الإعلان الجانبي هنا</p>
         </div>
     """, unsafe_allow_html=True)
