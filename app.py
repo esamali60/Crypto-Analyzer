@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import ta
-from textblob import TextBlob
 import yfinance as yf
 from streamlit_autorefresh import st_autorefresh
 
 # 1. إعداد الصفحة لتكون واسعة
-st.set_page_config(page_title="المحلل الذكي الشامل", layout="wide")
+st.set_page_config(page_title="المحلل الذكي بالتفاضل والتكامل الرياضي", layout="wide")
 
 # 2. التحديث التلقائي (كل 60 ثانية)
 st_autorefresh(interval=60000, limit=None, key="market_refresh")
@@ -18,9 +18,9 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# --- الدوال البرمجية لجلب وتحليل البيانات ---
+# --- الدوال البرمجية لجلب وتحليل البيانات رياضياً ---
 def get_market_data(symbol):
-    """دالة لجلب بيانات التاريخ السعري للأصل من مكتبة yfinance"""
+    """دالة لجلب بيانات السعر التاريخية للأصل من yfinance"""
     try:
         ticker = yf.Ticker(symbol.strip().upper())
         df = ticker.history(period="1mo", interval="1h")
@@ -30,11 +30,46 @@ def get_market_data(symbol):
         return df
     except: return None
 
-def analyze_technical(df):
-    """دالة لحساب مؤشر القوة النسبية RSI وبولينجر باند ونقاط الدعم والمقاومة"""
-    rsi = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
-    bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
-    return df['close'].iloc[-1], rsi.iloc[-1], bb.bollinger_lband().iloc[-1], bb.bollinger_hband().iloc[-1]
+def analyze_with_calculus(df):
+    """
+    دالة تعتمد على التفاضل الرياضي (المشتقة الأولى والثانية) 
+    لتحديد السرعة، التسارع، ونقاط الانعكاس المتوقعة للسعر.
+    """
+    prices = df['close'].values
+    
+    # 1. المشتقة الأولى (السرعة / ميل السعر) باستخدام np.gradient
+    velocity = np.gradient(prices)
+    
+    # 2. المشتقة الثانية (التسارع / التقعر) لتحديد متى يفقد السعر عزمه
+    acceleration = np.gradient(velocity)
+    
+    current_price = prices[-1]
+    current_velocity = velocity[-1]
+    current_accel = acceleration[-1]
+    
+    # حساب المستويات المتوقعة للوقوف أو الانعكاس بناءً على التراكم (التكامل التقريبي)
+    integral_proxy = np.mean(prices) # متوسط السعر التراكمي كمستوى ارتكاز
+    
+    return current_price, current_velocity, current_accel, integral_proxy
+
+def get_calculus_recommendation(velocity, acceleration, price, base_level):
+    """
+    اتخاذ القرار بناءً على قيمة المشتقة الأولى والثانية (التفاضل)
+    """
+    if velocity > 0 and acceleration > 0:
+        trend = "صاعد بقوة (تسارع إيجابي 🚀)"
+        advice = "🟢 **التوصية:** السعر في مسار صاعد نشط. يمكنك الاحتفاظ أو الشراء بحذر مع متابعة العزم."
+    elif velocity > 0 and acceleration < 0:
+        trend = "صاعد يفقد زخمه (قريب من قمة محتملة ⚠️)"
+        advice = "🟡 **التوصية:** الصعود يتباطأ (المشتقة الثانية سالبة). يُفضل **الانتظار أو جني الأرباح جزئياً** لأنه قد يتوقف قريباً."
+    elif velocity < 0 and acceleration < 0:
+        trend = "هابط بقوة (تسارع سلبي للأسفل 🔻)"
+        advice = "🔴 **التوصية:** البيع أو تجنب الشراء حالياً، السعر يسقط بتسارع متزايد."
+    else:
+        trend = "هابط يبطئ من هبوطه (قريب من قاع محتمل 🔵)"
+        advice = f"🟢 **التوصية:** الهبوط يتباطأ والاقتراب من نقطة الارتكاز (${base_level:,.2f}). قد تكون فرصة **شراء استباقي** إذا ارتدت السرعة."
+    
+    return trend, advice
 
 def get_market_news(symbol):
     """دالة لجلب آخر الأخبار الاقتصادية المرتبطة بالرمز"""
@@ -45,39 +80,21 @@ def get_market_news(symbol):
         return [{'title': i.get('title'), 'link': i.get('link', '#')} for i in news if i.get('title')]
     except: return None
 
-def get_trading_recommendation(price, rsi, sup, res):
-    """دالة تحليل ذكية لإعطاء توصية شراء، بيع أو انتظار بناءً على المؤشرات"""
-    if rsi <= 30:
-        trend = "صاعد (فرصة ارتداد من القاع)"
-        advice = "🟢 **التوصية:** الشراء الآن (السعر في منطقة تشبع بيعي، وهناك احتمالية قوية للصعود)."
-    elif rsi >= 70:
-        trend = "هابط (تصحيح محتمل من القمة)"
-        advice = "🔴 **التوصية:** البيع أو جني الأرباح الآن (السعر في منطقة تشبع شرائي، وقد يسببه هبوط قريب)."
-    else:
-        if abs(price - sup) < abs(price - res):
-            trend = "محايد يميل للصعود تدريجياً"
-            advice = f"🟡 **التوصية:** الانتظار قليلاً أو الشراء بحذر عند الاقتراب من نقطة الدعم (${sup:,.2f})."
-        else:
-            trend = "محايد يميل للهبوط أو التذبذب"
-            advice = f"🟡 **التوصية:** الانتظار حتى يهبط السعر نحو الدعم (${sup:,.2f}) أو تجنب الشراء حالياً لقربه من المقاومة."
-    return trend, advice
-
 # --- واجهة المستخدم الرئيسية ---
 col_main, col_ads = st.columns([3, 1])
 
 with col_main:
-    st.title("🚀 المحلل الذكي الشامل للأسواق")
+    st.title("📐 المحلل الذكي بالتفاضل والتكامل الرياضي للأسواق")
     
-    # اختيار نوع السوق (عملات رقمية أم أسهم)
+    # اختيار نوع السوق
     market_type = st.radio("اختر نوع السوق الأساسي:", ["العملات الرقمية 🪙", "الأسهم العالمية 🏢"], horizontal=True)
     
-    # تحديد القوائم الجاهزة حسب السوق
     if market_type == "العملات الرقمية 🪙":
         options = ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "BNB-USD", "XRP-USD", "DOGE-USD"]
     else:
         options = ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "GOOGL", "META", "NFLX"]
 
-    # تنظيم طريقة الإدخال لمنع التشتيت
+    # طريقة الإدخال
     input_method = st.radio("اختر طريقتك لتحديد الأصل:", ["اختيار من القائمة الجاهزة 📋", "كتابة الرمز يدوياً ✍️"], horizontal=True)
 
     if input_method == "اختيار من القائمة الجاهزة 📋":
@@ -86,39 +103,40 @@ with col_main:
         manual_text = st.text_input("اكتب رمز الأصل بنفسك (مثال: AVAX-USD أو 2222.SR):", "")
         final_symbol = manual_text.strip().upper() if manual_text.strip() != "" else options[0]
 
-    # --- إضافة زر التحديث المباشر بجوار معلومات الحالة ---
+    # سطر الحالة وزر التحديث المباشر
     col_status, col_btn = st.columns([3, 1])
     with col_status:
-        st.info(f"📊 جارٍ تحليل الأصل الحالي: **{final_symbol}** (تحديث تلقائي كل دقيقة)")
+        st.info(f"📊 جارٍ تحليل الأصل الحالي رياضياً: **{final_symbol}** (تحديث تلقائي كل دقيقة)")
     with col_btn:
         manual_refresh_btn = st.button("🔄 تحديث مباشر")
 
-    # تنفيذ جلب البيانات وعرضها (سواء بالتحديث التلقائي أو بضغط زر التحديث المباشر)
+    # تنفيذ التحليل الرياضي وعرض النتائج
     if final_symbol:
-        with st.spinner('جاري جلب بيانات السوق وتحديث التحليل الفني...'):
+        with st.spinner('جاري تطبيق النمذجة الرياضية (التفاضل والتكامل) على السعر...'):
             df = get_market_data(final_symbol)
             news = get_market_news(final_symbol)
             
             if df is not None:
-                price, rsi, sup, res = analyze_technical(df)
-                trend, advice = get_trading_recommendation(price, rsi, sup, res)
+                price, velocity, acceleration, base_level = analyze_with_calculus(df)
+                trend, advice = get_calculus_recommendation(velocity, acceleration, price, base_level)
                 
-                # عرض السعر ومؤشر RSI
-                c1, c2 = st.columns(2)
+                # عرض السعر ومؤشرات التفاضل (السرعة والتسارع)
+                c1, c2, c3 = st.columns(3)
                 c1.metric("السعر الحالي", f"${price:,.2f}")
-                c2.metric("مؤشر RSI", f"{rsi:.2f}")
+                c2.metric("سرعة التغير (المشتقة 1)", f"{velocity:.4f}")
+                c3.metric("التسارع (المشتقة 2)", f"{acceleration:.4f}")
                 
-                # عرض التوصية الذكية
+                # عرض النبذة والتوصية الرياضية الذكية
                 st.markdown("---")
-                st.subheader("💡 النبذة والتوصية الذكية:")
-                st.write(f"📈 **حالة الاتجاه:** {trend}")
+                st.subheader("💡 النبذة والتحليل الرياضي الدقيق:")
+                st.write(f"📈 **حالة الاتجاه الهندسي:** {trend}")
                 st.markdown(advice)
                 
-                # عرض نقاط الدخول المقترحة
+                # عرض نقاط الوقف والارتكاز المحسوبة رياضياً
                 st.markdown("---")
-                st.subheader("🎯 أقرب نقاط الدخول المقترحة:")
-                st.write(f"🟢 **نقطة الدخول شراء (دعم):** ${sup:,.2f}")
-                st.write(f"🔴 **نقطة الدخول بيع (مقاومة):** ${res:,.2f}")
+                st.subheader("🎯 المستويات المحسوبة رياضياً:")
+                st.write(f"⚖️ **مستوى الارتكاز التراكمي (التكامل التقريبي):** ${base_level:,.2f}")
+                st.write(f"🔍 تفسير هندسي: السعر يميل للارتداد أو الاستقرار كلما اقترب من خط الارتكاز التراكمي طالما أن التسارع يقترب من الصفر.")
                 
                 # عرض الأخبار الاقتصادية
                 st.markdown("---")
@@ -127,7 +145,7 @@ with col_main:
                     for item in news[:5]:
                         st.markdown(f"🔗 [{item['title']}]({item['link']})")
                 else:
-                    st.warning("لا توجد أخبار اقتصادية متاحة حالياً لهذا الرمز.")
+                    st.warning("لا توجد أخبار الاقتصادية متاحة حالياً لهذا الرمز.")
             else:
                 st.error(f"عذراً، لم نتمكن من جلب بيانات للرمز ({final_symbol}). تأكد من صحة كتابة الرمز.")
 
