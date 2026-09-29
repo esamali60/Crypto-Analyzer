@@ -160,4 +160,25 @@ with col_ads:
         <div style="background-color: #1e1e1e; border: 1px dashed #444; padding: 20px; border-radius: 10px; height: 500px; color: #888; text-align: center;">
             <p style="margin-top: 200px;">ضع كود الإعلان الجانبي هنا</p>
         </div>
+        import numpy as np
+
+def check_calculus_turning_points(prices):
+    # حساب المشتقة الأولى (السرعة)
+    velocity = np.gradient(prices)
+    
+    # حساب المشتقة الثانية (التسارع)
+    acceleration = np.gradient(velocity)
+    
+    curr_vel = velocity[-1]
+    curr_accel = acceleration[-1]
+    
+    # تحديد الحالة بدقة رياضية
+    if curr_vel > 0 and curr_accel < 0:
+        return "⚠️ تحذير: المشتقة الأولى موجبة والثانية سالبة -> هذا يعني أن الصعود يتباطأ (نهاية الموجة الصاعدة / قمة محتملة)."
+    elif curr_vel < 0 and curr_accel > 0:
+        return "🟢 إشارة: المشتقة الأولى سالبة والثانية موجبة -> هذا يعني أن الهبوط يتباطأ (نهاية الموجة الهابطة / قاع ومحتمل للارتداد)."
+    elif curr_vel > 0 and curr_accel > 0:
+        return "🚀 مسار صاعد قوي: السرعة والتسارع كلاهما موجبان."
+    else:
+        return "🔻 مسار هابط قوي: السرعة والتسارع كلاهما سالبان."
     """, unsafe_allow_html=True)
