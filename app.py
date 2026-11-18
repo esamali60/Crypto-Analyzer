@@ -84,7 +84,7 @@ def live_trading_dashboard():
     else:
         signal_text = "انتظار (Neutral) ⏳"
         signal_color = "#ffc107" # أصفر
-        btn_color_class = "🟡 انتظار"
+        btn_color_class = "🟡 شراء (انتظار)"
 
     st.caption(f"🔄 آخر تحديث للسعر: **{last_update}** (يتحدث تلقائياً كل {refresh_rate} ثانية)")
 
@@ -108,22 +108,32 @@ def live_trading_dashboard():
     # ==========================================
     if not st.session_state.trade_active:
         st.subheader("🚀 بدء صفقة جديدة")
-        suggested_sl = current_price * (1 - (risk_percentage / 100))
-        suggested_tp = current_price * (1 + (risk_percentage * 2 / 100))
+        
+        # عكس حساب وقف الخسارة وهدف الربح بناءً على نوع الإشارة (بيع أو شراء)
+        if is_sell_signal:
+            # في البيع (Short): الخسارة عند ارتفاع السعر، والربح عند انخفاضه
+            suggested_sl = current_price * (1 + (risk_percentage / 100))
+            suggested_tp = current_price * (1 - (risk_percentage * 2 / 100))
+            sl_label = f"+{risk_percentage}%"
+            tp_label = f"-{risk_percentage * 2}%"
+        else:
+            # في الشراء (Long): الخسارة عند انخفاض السعر، والربح عند ارتفاعه
+            suggested_sl = current_price * (1 - (risk_percentage / 100))
+            suggested_tp = current_price * (1 + (risk_percentage * 2 / 100))
+            sl_label = f"-{risk_percentage}%"
+            tp_label = f"+{risk_percentage * 2}%"
 
         c1, c2, c3 = st.columns(3)
         c1.info(f"**سعر الدخول المتوقع:** ${current_price:,.2f}")
-        c2.warning(f"**وقف الخسارة المقترح:** ${suggested_sl:,.2f}")
-        c3.success(f"**هدف الربح المقترح:** ${suggested_tp:,.2f}")
+        c2.warning(f"**وقف الخسارة المقترح ({sl_label}):** ${suggested_sl:,.2f}")
+        c3.success(f"**هدف الربح المقترح ({tp_label}):** ${suggested_tp:,.2f}")
 
-        # زر بدء الصفقة يضيء حسب الإشارة (أخضر للشراء، أحمر للبيع) ويعمل دائماً
         st.markdown(f"""
         <div style="text-align: center; padding: 5px; font-weight: bold; color: #ccc;">
             الحالة الحالية لإشارة التأسيس: <span style="color: {signal_color};">{btn_color_class}</span>
         </div>
         """, unsafe_allow_html=True)
 
-        # زر البدء أصبح متاحاً في جميع الحالات بناءً على طلبك
         if st.button(f"✅ بدء الصفقة الآن ({btn_color_class})", type="primary", use_container_width=True):
             st.session_state.trade_active = True
             st.session_state.entry_price = current_price
@@ -131,30 +141,35 @@ def live_trading_dashboard():
             st.session_state.take_profit = suggested_tp
             st.session_state.coins_bought = capital / current_price
             st.session_state.trade_symbol = symbol
-            st.session_state.trade_type = "شراء" if not is_sell_signal else "بيع"
+            st.session_state.trade_type = "بيع" if is_sell_signal else "شراء"
             st.rerun()
 
     else:
         # مراقبة الصفقة الحية
-        st.subheader(f"📡 مراقبة الصفقة الحية للعملة: {st.session_state.trade_symbol} ({st.session_state.trade_type})")
+        t_type = st.session_state.trade_type
+        st.subheader(f"📡 مراقبة الصفقة الحية للعملة: {st.session_state.trade_symbol} ({t_type})")
         
         entry = st.session_state.entry_price
         sl = st.session_state.stop_loss
         tp = st.session_state.take_profit
         coins = st.session_state.coins_bought
         
-        current_value = coins * current_price
-        pnl_dollar = current_value - capital
-        pnl_percent = ((current_price - entry) / entry) * 100
-
-        # فحص شروط إيقاف الربح أو الخسارة
-        hit_stop_loss = current_price <= sl
-        hit_take_profit = current_price >= tp
+        # حساب الربح والخسارة وشروط الإغلاق بناءً على نوع الصفقة (شراء أم بيع)
+        if t_type == "بيع":
+            pnl_dollar = (entry - current_price) * coins
+            pnl_percent = ((entry - current_price) / entry) * 100
+            hit_stop_loss = current_price >= sl   # الخسارة إذا ارتفع السعر فوق الحد
+            hit_take_profit = current_price <= tp # الربح إذا انخفض السعر تحت الهدف
+        else:
+            pnl_dollar = (current_price - entry) * coins
+            pnl_percent = ((current_price - entry) / entry) * 100
+            hit_stop_loss = current_price <= sl   # الخسارة إذا انخفض السعر تحت الحد
+            hit_take_profit = current_price >= tp # الربح إذا ارتفع السعر فوق الهدف
 
         if hit_stop_loss:
-            st.error("🚨 **تنبيه وقف الخسارة!** السعر وصل إلى حد وقف الخسارة المحدد.")
+            st.error("🚨 **تنبيه وقف الخسارة!** السعر وصل إلى حد وقف الخسارة المحدد. اضغط على **خروج الآن**.")
         elif hit_take_profit:
-            st.success("🎉 **تنبيه جني الأرباح!** الصفقة حققت الهدف المطلوب.")
+            st.success("🎉 **تنبيه جني الأرباح!** الصفقة حققت الهدف المطلوب. اضغط على **خروج الآن** لجني الربح.")
         else:
             st.info("🟢 **الصفقة مستمرة وتعمل بنجاح...** جاري متابعة الأرباح والخسائر لحظياً.")
 
@@ -165,7 +180,7 @@ def live_trading_dashboard():
         m3.metric("وقف الخسارة", f"${sl:,.2f}")
         m4.metric("هدف الربح", f"${tp:,.2f}")
 
-        # زر الخروج الآن عند انتهاء الربح أو الخسارة أو الرغبة في الإغلاق
+        # زر الخروج الآن
         if st.button("🚨 خروج الآن (إغلاق الصفقة وتصفيتها)", type="primary", use_container_width=True):
             st.session_state.trade_active = False
             st.rerun()
