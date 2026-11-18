@@ -1,7 +1,5 @@
 streamlit
-requests
 pandas
-ta
-textblob
-yfinance
-streamlit-autorefresh
+numpy
+requests
+plotly
