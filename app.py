@@ -7,7 +7,7 @@ from datetime import datetime
 
 st.set_page_config(page_title="بوت التداول اللحظي الذكي", layout="wide")
 
-# تهيئة متغيرات الجلسة لحفظ حالة الصفقة المفتوحة
+# تهيئة متغيرات الجلسة
 if "trade_active" not in st.session_state:
     st.session_state.trade_active = False
 if "entry_price" not in st.session_state:
@@ -33,7 +33,6 @@ refresh_rate = st.sidebar.selectbox("سرعة التحديث اللحظي (با�
 # دالة جلب البيانات اللحظية
 def fetch_live_data(pair):
     try:
-        # جلب بيانات دقيقة واحدة لآخر يوم للحصول على أحدث سعر لحظي
         df = yf.download(pair, period="1d", interval="1m", progress=False)
         if df.empty:
             return None
@@ -45,7 +44,7 @@ def fetch_live_data(pair):
     except Exception:
         return None
 
-# جزء يتحدث تلقائياً بشكل لحظي
+# جزء التحديث اللحظي التلقائي
 @st.fragment(run_every=refresh_rate)
 def live_trading_dashboard():
     df = fetch_live_data(symbol)
@@ -68,21 +67,35 @@ def live_trading_dashboard():
     current_rsi = float(df['rsi'].iloc[-1]) if not pd.isna(df['rsi'].iloc[-1]) else 50.0
     current_sma = float(df['sma_20'].iloc[-1]) if not pd.isna(df['sma_20'].iloc[-1]) else current_price
 
-    # تحديد إشارة الدخول/الخروج الفنية
-    signal = "انتظار (Neutral) ⏳"
-    if current_rsi < 35 and current_price > current_sma:
-        signal = "شراء الآن (BUY) 🟢"
-    elif current_rsi > 65 or current_price < current_sma * 0.985:
-        signal = "بيع / خروج (SELL) 🔴"
+    # تحديد إشارة البوت الفنية بدقة
+    is_buy_signal = current_rsi < 35 and current_price > current_sma
+    is_sell_signal = current_rsi > 65 or current_price < current_sma * 0.985
 
-    st.caption(f"🔄 آخر تحديث لحظي للسعر: **{last_update}** (يتحدث تلقائياً كل {refresh_rate} ثانية)")
+    if is_buy_signal:
+        signal_text = "شراء (BUY) 🟢"
+        signal_color = "#28a745" # أخضر
+    elif is_sell_signal:
+        signal_text = "بيع / خروج (SELL) 🔴"
+        signal_color = "#dc3545" # أحمر
+    else:
+        signal_text = "انتظار (Neutral) ⏳"
+        signal_color = "#ffc107" # أصفر/برتقالي
 
-    # عرض المؤشرات الرئيسية
+    st.caption(f"🔄 آخر تحديث للسعر: **{last_update}** (يتحدث تلقائياً كل {refresh_rate} ثانية)")
+
+    # عرض المؤشرات الرئيسية مع مؤشر الحالة المضيء
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("السعر اللحظي", f"${current_price:,.2f}")
     col2.metric("مؤشر القوة (RSI)", f"{current_rsi:.2f}")
     col3.metric("الكمية المتاحة للشراء", f"{(capital / current_price):.4f}")
-    col4.metric("إشارة البوت الحالية", signal)
+    
+    # عرض إشارة البوت مع المصباح اللوني المضيء
+    with col4:
+        st.markdown(f"""
+        <div style="background-color: {signal_color}; padding: 10px; border-radius: 8px; text-align: center; color: white; font-weight: bold; font-size: 16px; box-shadow: 0px 0px 10px {signal_color};">
+            إشارة البوت: {signal_text}
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -99,17 +112,22 @@ def live_trading_dashboard():
         c2.warning(f"**وقف الخسارة المقترح:** ${suggested_sl:,.2f}")
         c3.success(f"**هدف الربح المقترح:** ${suggested_tp:,.2f}")
 
-        if st.button("✅ تم بدء الصفقة (تفعيل المراقبة الحية)", type="primary", use_container_width=True):
-            st.session_state.trade_active = True
-            st.session_state.entry_price = current_price
-            st.session_state.stop_loss = suggested_sl
-            st.session_state.take_profit = suggested_tp
-            st.session_state.coins_bought = capital / current_price
-            st.session_state.trade_symbol = symbol
-            st.rerun()
+        # التحقق من حالة الإشارة قبل السماح ببدء الصفقة
+        if is_sell_signal:
+            st.error("⚠️ **لا يمكن بدء صفقة جديدة:** الإشارة الحالية هي **بيع/خروج**. انتظر حتى تتحول الإشارة إلى شراء أخضر.")
+            st.button("🚫 بدء الصفقة معطل (الإشارة بيع)", disabled=True, use_container_width=True)
+        else:
+            if st.button("✅ تم بدء الصفقة (تفعيل المراقبة الحية)", type="primary", use_container_width=True):
+                st.session_state.trade_active = True
+                st.session_state.entry_price = current_price
+                st.session_state.stop_loss = suggested_sl
+                st.session_state.take_profit = suggested_tp
+                st.session_state.coins_bought = capital / current_price
+                st.session_state.trade_symbol = symbol
+                st.rerun()
 
     else:
-        # في حال وجود صفقة مفتوحة حالياً
+        # مراقبة الصفقة الحية
         st.subheader(f"📡 مراقبة الصفقة الحية للعملة: {st.session_state.trade_symbol}")
         
         entry = st.session_state.entry_price
@@ -121,35 +139,39 @@ def live_trading_dashboard():
         pnl_dollar = current_value - capital
         pnl_percent = ((current_price - entry) / entry) * 100
 
-        # التحقق من شروط إيقاف الصفقة وإعطاء التنبيه
-        if current_price <= sl:
-            st.error("🚨 **تنبيه إيقاف الصفقة فوراً (STOP LOSS)!** السعر وصل إلى حد وقف الخسارة. قم بالبيع الآن لحماية رأس مالك.")
-        elif current_price >= tp:
-            st.success("🎉 **تنبيه جني الأرباح (TAKE PROFIT)!** الصفقة حققت الهدف المطلوب. يُنصح بإغلاق الصفقة وجني الربح الآن.")
-        elif "SELL" in signal:
-            st.warning("⚠️ **إشارة خروج فنية (SELL)!** المؤشرات الفنية تشير إلى انعكاس السعر وهبوطه، يفضل إغلاق الصفقة الآن.")
+        # فحص شروط إنهاء الصفقة (وقف الخسارة أو جني الأرباح)
+        hit_stop_loss = current_price <= sl
+        hit_take_profit = current_price >= tp
+
+        if hit_stop_loss:
+            st.error("🚨 **تنبيه خطير - وقف الخسارة!** السعر وصل إلى حد وقف الخسارة. اضغط على زر **خروج الآن** فوراً لحماية رصيدك.")
+        elif hit_take_profit:
+            st.success("🎉 **مبروك - هدف الأرباح تحقق!** وصل السعر لهدف الربح المطلوب. اضغط على زر **خروج الآن** لجني الأرباح.")
+        elif is_sell_signal:
+            st.warning("⚠️ **إشارة انعكاس (بيع)!** المؤشرات تحولت إلى البيع، يفضل إغلاق الصفقة.")
         else:
-            st.info("🟢 **الصفقة مستمرة بأمان...** السعر يتحرك ضمن النطاق الآمن ولم يصل لنقطة الإيقاف بعد.")
+            st.info("🟢 **الصفقة مستمرة بأمان...** جاري متابعة السعر لحظياً.")
 
         # عرض تفاصيل الصفقة الحية
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("سعر الدخول", f"${entry:,.2f}")
-        m2.metric("الربح / الخسارة اللحظي", f"${pnl_dollar:,.2f}", f"{pnl_percent:.2f}%")
-        m3.metric("حد وقف الخسارة", f"${sl:,.2f}")
-        m4.metric("هدف جني الربح", f"${tp:,.2f}")
+        m2.metric("الربح / الخسارة", f"${pnl_dollar:,.2f}", f"{pnl_percent:.2f}%")
+        m3.metric("وقف الخسارة", f"${sl:,.2f}")
+        m4.metric("هدف الربح", f"${tp:,.2f}")
 
-        if st.button("🛑 تم إغلاق الصفقة (إنهاء المراقبة)", use_container_width=True):
+        # زر واضح جداً للخروج الآن عند انتهاء الربح أو الخسارة
+        if st.button("🚨 خروج الآن (إغلاق الصفقة وتصفيتها)", type="primary", use_container_width=True):
             st.session_state.trade_active = False
             st.rerun()
 
-    # الرسم البياني اللحظي
+    # الرسم البياني اللحظي مع الخطوط التوجيهية
     st.markdown("---")
     fig = px.line(df.tail(60), x='timestamp', y='close', title=f"حركة السعر اللحظية (آخر 60 دقيقة) - {symbol}")
     if st.session_state.trade_active:
-        fig.add_hline(y=st.session_state.entry_price, line_dash="dash", line_color="blue", annotation_text="نقطة الدخول")
+        fig.add_hline(y=st.session_state.entry_price, line_dash="dash", line_color="blue", annotation_text="دخول")
         fig.add_hline(y=st.session_state.stop_loss, line_dash="dot", line_color="red", annotation_text="وقف الخسارة")
         fig.add_hline(y=st.session_state.take_profit, line_dash="dot", line_color="green", annotation_text="هدف الربح")
     st.plotly_chart(fig, use_container_width=True)
 
-# تشغيل لوحة المراقبة الحية
+# تشغيل اللوحة
 live_trading_dashboard()
