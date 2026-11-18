@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import requests
+import yfinance as yf
 import plotly.express as px
-from datetime import datetime
 
 st.set_page_config(page_title="بوت التداول الذكي", layout="wide")
 
@@ -12,28 +11,29 @@ st.markdown("مراقبة لحظية للعملات، حساب المخاطر، 
 
 # الشريط الجانبي للإعدادات
 st.sidebar.header("إعدادات الصفقة")
-symbol = st.sidebar.text_input("اسم العملة (مثال: BTCUSDT أو ETHUSDT)", value="BTCUSDT").upper()
+# استخدام رموز Yahoo Finance مثل BTC-USD
+symbol = st.sidebar.text_input("رمز العملة (مثال: BTC-USD أو ETH-USD)", value="BTC-USD").upper()
 capital = st.sidebar.number_input("المبلغ المخصص للاستثمار ($)", min_value=10.0, value=500.0, step=50.0)
 risk_percentage = st.sidebar.slider("نسبة وقف الخسارة المسموح بها (%)", min_value=1.0, max_value=10.0, value=3.0)
 
-# دالة لجلب البيانات التاريخية واللحظية من Binance API
+# دالة لجلب البيانات عبر yfinance
 @st.cache_data(ttl=60)
 def fetch_crypto_data(pair):
-    url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1h&limit=100"
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        df = pd.DataFrame(data, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_asset_volume', 'number_of_trades',
-            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-        ])
-        df['close'] = df['close'].astype(float)
-        df['high'] = df['high'].astype(float)
-        df['low'] = df['low'].astype(float)
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    try:
+        # جلب البيانات التاريخية للساعة الأخيرة لآخر 5 أيام
+        df = yf.download(pair, period="5d", interval="1h", progress=False)
+        if df.empty:
+            return None
+        
+        # تنظيم أسماء الأعمدة في حال كانت مصفوفة متعددة المستويات
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        df = df.reset_index()
+        # توحيد أسماء الأعمدة
+        df = df.rename(columns={'Datetime': 'timestamp', 'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'})
         return df
-    else:
+    except Exception as e:
         return None
 
 if st.sidebar.button("تشغيل / تحديث التحليل"):
@@ -41,7 +41,7 @@ if st.sidebar.button("تشغيل / تحديث التحليل"):
         df = fetch_crypto_data(symbol)
         
         if df is not None and not df.empty:
-            current_price = df['close'].iloc[-1]
+            current_price = float(df['close'].iloc[-1])
             
             # حساب المؤشرات الفنية (RSI و Simple Moving Average)
             delta = df['close'].diff()
@@ -51,8 +51,8 @@ if st.sidebar.button("تشغيل / تحديث التحليل"):
             df['rsi'] = 100 - (100 / (1 + rs))
             df['sma_20'] = df['close'].rolling(window=20).mean()
             
-            current_rsi = df['rsi'].iloc[-1]
-            current_sma = df['sma_20'].iloc[-1]
+            current_rsi = float(df['rsi'].iloc[-1])
+            current_sma = float(df['sma_20'].iloc[-1])
             
             # تحديد الإشارة (شراء، بيع، انتظار)
             signal = "انتظار (Neutral)"
@@ -63,7 +63,7 @@ if st.sidebar.button("تشغيل / تحديث التحليل"):
                 
             # حساب مستويات المخاطر بناءً على رأس المال المخصص
             stop_loss_price = current_price * (1 - (risk_percentage / 100))
-            take_profit_price = current_price * (1 + (risk_percentage * 2 / 100)) # نسبة المخاطرة للعائد 1:2
+            take_profit_price = current_price * (1 + (risk_percentage * 2 / 100))
             allocated_coins = capital / current_price
 
             # عرض النتائج في واجهة Streamlit
@@ -94,6 +94,6 @@ if st.sidebar.button("تشغيل / تحديث التحليل"):
             st.plotly_chart(fig, use_container_width=True)
             
         else:
-            st.error("تعذر جلب البيانات. تأكد من صحة اسم العملة (مثال: BTCUSDT أو ADAUSDT).")
+            st.error("تعذر جلب البيانات. تأكد من صحة رمز العملة (مثال: BTC-USD أو ETH-USD).")
 else:
-    st.info("قم بإدخال بيانات العملة والمبلغ في الشريط الجانبي ثم اضغط على زر **تشغيل / تحديث التحليل**.")
+    st.info("قم بإدخال رمز العملة والمبلغ في الشريط الجانبي ثم اضغط على زر **تشغيل / تحديث التحليل**.")
