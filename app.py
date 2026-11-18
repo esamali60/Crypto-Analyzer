@@ -8,7 +8,7 @@ from datetime import datetime
 st.set_page_config(page_title="بوت التداول الذكي", layout="wide")
 
 st.title("🤖 بوت تداول العملات الرقمية التفاعلي")
-st.markdown("مراقبة اللحظية للعملات، حساب المخاطر، وإعطاء إشارات الشراء والبيع بناءً على التحليل الفني.")
+st.markdown("مراقبة لحظية للعملات، حساب المخاطر، وإعطاء إشارات الشراء والبيع بناءً على التحليل الفني.")
 
 # الشريط الجانبي للإعدادات
 st.sidebar.header("إعدادات الصفقة")
@@ -16,7 +16,7 @@ symbol = st.sidebar.text_input("اسم العملة (مثال: BTCUSDT أو ETHU
 capital = st.sidebar.number_input("المبلغ المخصص للاستثمار ($)", min_value=10.0, value=500.0, step=50.0)
 risk_percentage = st.sidebar.slider("نسبة وقف الخسارة المسموح بها (%)", min_value=1.0, max_value=10.0, value=3.0)
 
-# دالة لجلب البيانات التاريخية واللحظية من Binance API (عامة ومجانية)
+# دالة لجلب البيانات التاريخية واللحظية من Binance API
 @st.cache_data(ttl=60)
 def fetch_crypto_data(pair):
     url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1h&limit=100"
@@ -56,13 +56,10 @@ if st.sidebar.button("تشغيل / تحديث التحليل"):
             
             # تحديد الإشارة (شراء، بيع، انتظار)
             signal = "انتظار (Neutral)"
-            color = "orange"
             if current_rsi < 35 and current_price > current_sma:
                 signal = "شراء (BUY)"
-                color = "green"
             elif current_rsi > 65 or current_price < current_sma * 0.97:
                 signal = "بيع / جني أرباح (SELL)"
-                color = "red"
                 
             # حساب مستويات المخاطر بناءً على رأس المال المخصص
             stop_loss_price = current_price * (1 - (risk_percentage / 100))
@@ -92,7 +89,7 @@ if st.sidebar.button("تشغيل / تحديث التحليل"):
 
             # الرسم البياني لحركة السعر
             st.markdown("---")
-            st.subheader("📈 رسم بياني لحركة السعر وإغلاقات آخر الساعات")
+            st.subheader(f"📈 رسم بياني لحركة سعر {symbol}")
             fig = px.line(df, x='timestamp', y='close', title=f"حركة سعر {symbol} خلال الفترة الأخيرة")
             st.plotly_chart(fig, use_container_width=True)
             
