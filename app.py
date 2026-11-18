@@ -70,7 +70,7 @@ if st.sidebar.button("تشغيل / تحديث التحليل"):
             allocated_coins = capital / current_price
 
             # عرض النتائج في واجهة Streamlit
-            st.success(تم بنجاح تحليل العملة: **{symbol}**)
+            st.success(f"تم بنجاح تحليل العملة: **{symbol}**")
             
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("السعر الحالي", f"${current_price:,.2f}")
