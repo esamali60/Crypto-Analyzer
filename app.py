@@ -5,13 +5,12 @@ import yfinance as yf
 import plotly.express as px
 from datetime import datetime
 
-st.set_page_config(page_title="مكتب التداول الذكي + مختبر الاختبار", layout="wide")
+st.set_page_config(page_title="بوت التداول الفائق (7 مدارس تحليلية)", layout="wide")
 
 defaults = {
     "trade_active": False,
     "entry_price": 0.0,
     "stop_loss": 0.0,
-    "initial_sl": 0.0,
     "take_profit": 0.0,
     "position_size_usd": 0.0,
     "coins_bought": 0.0,
@@ -24,7 +23,7 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-st.title("🏆 بوت التداول الاحترافي + مختبر الاختبار التاريخي (Backtest)")
+st.title("👑 بوت التداول الفائق (7 مدارس تحليلية + سيولة VWAP + فلتر ADX)")
 
 WATCHLIST = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "NEAR-USD", "BNB-USD"]
 
@@ -48,32 +47,69 @@ def fetch_live_data(pair, period="5d", interval="5m"):
             'Close': 'close',
             'Volume': 'volume'
         })
-        df['close'] = pd.to_numeric(df['close'], errors='coerce')
-        df = df.dropna(subset=['close']).reset_index(drop=True)
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df = df.dropna(subset=['close', 'high', 'low']).reset_index(drop=True)
         return df if not df.empty else None
     except Exception:
         return None
 
 def compute_indicators(df):
     close = df['close']
+    high = df['high']
+    low = df['low']
+    volume = df['volume'].fillna(0)
+
+    # 1. RSI (14)
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
 
+    # 2. EMA 9 & EMA 21
     ema9 = close.ewm(span=9, adjust=False).mean()
     ema21 = close.ewm(span=21, adjust=False).mean()
 
+    # 3. MACD
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
     signal_line = macd.ewm(span=9, adjust=False).mean()
 
+    # 4. Bollinger Bands
     sma20 = close.rolling(window=20).mean()
     std20 = close.rolling(window=20).std()
     upper_band = sma20 + (std20 * 2)
     lower_band = sma20 - (std20 * 2)
+
+    # 5. VWAP (متوسط السعر المرجح بحجم التداول - مدرسة السيولة)
+    typical_price = (high + low + close) / 3.0
+    cum_vol = volume.rolling(window=48, min_periods=1).sum().replace(0, np.nan)
+    cum_tp_vol = (typical_price * volume).rolling(window=48, min_periods=1).sum()
+    vwap = (cum_tp_vol / cum_vol).fillna(close)
+
+    # 6. Volume Ratio (كشف انفجار السيولة)
+    vol_sma20 = volume.rolling(window=20).mean().replace(0, np.nan)
+    vol_ratio = (volume / vol_sma20).fillna(1.0)
+
+    # 7. ATR (14) (قياس التقلب لضبط وقف الخسارة الذكي)
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=14).mean().bfill()
+
+    # 8. ADX (14) (قياس قوة الترند ومنع التذبذب الوهمي)
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    atr_smooth = tr.rolling(window=14).mean().replace(0, np.nan)
+    plus_di = 100 * (pd.Series(plus_dm, index=df.index).rolling(window=14).mean() / atr_smooth)
+    minus_di = 100 * (pd.Series(minus_dm, index=df.index).rolling(window=14).mean() / atr_smooth)
+    dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan))
+    adx = dx.rolling(window=14).mean().fillna(20.0)
 
     return pd.DataFrame({
         "close": close,
@@ -83,10 +119,14 @@ def compute_indicators(df):
         "macd": macd,
         "signal_line": signal_line,
         "upper_band": upper_band,
-        "lower_band": lower_band
+        "lower_band": lower_band,
+        "vwap": vwap,
+        "vol_ratio": vol_ratio,
+        "atr": atr,
+        "adx": adx
     })
 
-def score_at_index(ind_df, idx):
+def score_at_index(ind_df, idx, htf_bias=0):
     current_price = float(ind_df['close'].iloc[idx])
     curr_rsi = float(ind_df['rsi'].iloc[idx]) if not pd.isna(ind_df['rsi'].iloc[idx]) else 50.0
     curr_ema9 = float(ind_df['ema9'].iloc[idx])
@@ -95,43 +135,80 @@ def score_at_index(ind_df, idx):
     curr_sig = float(ind_df['signal_line'].iloc[idx])
     upper_band = ind_df['upper_band'].iloc[idx]
     lower_band = ind_df['lower_band'].iloc[idx]
+    curr_vwap = float(ind_df['vwap'].iloc[idx])
+    curr_vol_ratio = float(ind_df['vol_ratio'].iloc[idx])
+    curr_adx = float(ind_df['adx'].iloc[idx])
+    curr_atr = float(ind_df['atr'].iloc[idx])
 
     score = 0
     reasons = []
 
+    # المدرسة 1: الزخم RSI
     if curr_rsi < 35:
-        score += 30
+        score += 20
         reasons.append("تشبع بيعي قوي (RSI)")
     elif curr_rsi < 45:
-        score += 15
+        score += 10
         reasons.append("منطقة تجميع جيدة (RSI)")
     elif curr_rsi > 65:
-        score -= 30
+        score -= 20
         reasons.append("تشبع شرائي مرتفع (RSI)")
     elif curr_rsi > 55:
-        score -= 15
+        score -= 10
         reasons.append("ضعف في زخم الصعود (RSI)")
 
+    # المدرسة 2: تقاطع المتوسطات EMA
     if curr_ema9 > curr_ema21:
-        score += 25
-        reasons.append("اتجاه صاعد قصير المدى (EMA9 > EMA21)")
-    else:
-        score -= 25
-        reasons.append("اتجاه هابط قصير المدى (EMA9 < EMA21)")
-
-    if curr_macd > curr_sig:
-        score += 25
-        reasons.append("تقاطع إيجابي للماكد (MACD)")
-    else:
-        score -= 25
-        reasons.append("تقاطع سلبي للماكد (MACD)")
-
-    if not pd.isna(lower_band) and current_price <= float(lower_band) * 1.005:
         score += 20
-        reasons.append("ارتداد من الحد السفلي لبولينجر")
-    elif not pd.isna(upper_band) and current_price >= float(upper_band) * 0.995:
+        reasons.append("اتجاه صاعد (EMA9 > EMA21)")
+    else:
         score -= 20
-        reasons.append("ملامسة القمة السعرية لبولينجر")
+        reasons.append("اتجاه هابط (EMA9 < EMA21)")
+
+    # المدرسة 3: الماكد MACD
+    if curr_macd > curr_sig:
+        score += 15
+        reasons.append("تقاطع إيجابي (MACD)")
+    else:
+        score -= 15
+        reasons.append("تقاطع سلبي (MACD)")
+
+    # المدرسة 4: بولينجر باند
+    if not pd.isna(lower_band) and current_price <= float(lower_band) * 1.005:
+        score += 15
+        reasons.append("ارتداد من قاع بولينجر")
+    elif not pd.isna(upper_band) and current_price >= float(upper_band) * 0.995:
+        score -= 15
+        reasons.append("ملامسة قمة بولينجر")
+
+    # المدرسة 5: سيولة الحيتان VWAP + Volume
+    if current_price > curr_vwap:
+        score += 15
+        reasons.append("السعر فوق خط سيولة المؤسسات (VWAP)")
+    else:
+        score -= 15
+        reasons.append("السعر تحت خط سيولة المؤسسات (VWAP)")
+
+    if curr_vol_ratio >= 1.5:
+        reasons.append(f"انفجار في حجم التداول ({curr_vol_ratio:.1f}x)")
+        score += 10 if score > 0 else -10
+
+    # المدرسة 6: التوافق مع الفريم الأعلى
+    if htf_bias > 0:
+        score += 10
+        reasons.append("متوافق مع صعود فريم الساعة")
+    elif htf_bias < 0:
+        score -= 10
+        reasons.append("متوافق مع هبوط فريم الساعة")
+
+    # المدرسة 7: فلتر قوة الترند ADX
+    if curr_adx < 18:
+        score = int(score * 0.6)
+        reasons.append(f"سوق عرضي ضعيف (ADX={curr_adx:.1f}) - تم تخفيف الإشارة للحماية")
+    elif curr_adx >= 25:
+        reasons.append(f"ترند قوي ومؤكد (ADX={curr_adx:.1f})")
+
+    score = max(-100, min(100, score))
 
     if score >= 30:
         decision = "BUY"
@@ -143,10 +220,26 @@ def score_at_index(ind_df, idx):
     return {
         "price": current_price,
         "rsi": curr_rsi,
+        "adx": curr_adx,
+        "atr": curr_atr,
+        "vwap": curr_vwap,
         "score": score,
         "decision": decision,
         "reasons": reasons
     }
+
+def get_higher_tf_info(pair):
+    df_1h = fetch_live_data(pair, period="5d", interval="1h")
+    if df_1h is None or len(df_1h) < 22:
+        return "غير محدد", 0
+    ema20 = df_1h['close'].ewm(span=20, adjust=False).mean()
+    last_close = float(df_1h['close'].iloc[-1])
+    last_ema = float(ema20.iloc[-1])
+    if last_close > last_ema * 1.003:
+        return "صاعد على فريم الساعة 🟢", 1
+    elif last_close < last_ema * 0.997:
+        return "هابط على فريم الساعة 🔴", -1
+    return "عرضي على فريم الساعة 🟡", 0
 
 def run_backtest(df, pos_usd, sl_pct, tp_pct):
     if df is None or len(df) < 40:
@@ -163,9 +256,9 @@ def run_backtest(df, pos_usd, sl_pct, tp_pct):
     peak_equity = 0.0
     max_dd = 0.0
 
-    for i in range(28, len(ind)):
+    for i in range(30, len(ind)):
         price = float(ind['close'].iloc[i])
-        res = score_at_index(ind, i)
+        res = score_at_index(ind, i, htf_bias=0)
 
         if not in_pos:
             if res['decision'] == "BUY":
@@ -228,30 +321,18 @@ def run_backtest(df, pos_usd, sl_pct, tp_pct):
         "log": tdf
     }
 
-def get_higher_tf_trend(pair):
-    df_1h = fetch_live_data(pair, period="5d", interval="1h")
-    if df_1h is None or len(df_1h) < 22:
-        return "غير محدد"
-    ema20 = df_1h['close'].ewm(span=20, adjust=False).mean()
-    last_close = float(df_1h['close'].iloc[-1])
-    last_ema = float(ema20.iloc[-1])
-    if last_close > last_ema * 1.003:
-        return "صاعد على فريم الساعة 🟢"
-    elif last_close < last_ema * 0.997:
-        return "هابط على فريم الساعة 🔴"
-    return "عرضي على فريم الساعة 🟡"
-
 # الشريط الجانبي
 st.sidebar.header("📡 رادار اقتناص الفرص الحية")
 if st.sidebar.button("🔍 ابحث لي عن أفضل عملة الآن", type="primary", use_container_width=True):
-    with st.sidebar.status("جاري مسح السوق وتحليل 10 عملات..."):
+    with st.sidebar.status("جاري مسح السوق وتحليل 10 عملات بـ 7 مدارس..."):
         best_coin = None
         highest_abs_score = 0
         for coin in WATCHLIST:
             d = fetch_live_data(coin, period="2d", interval="5m")
             if d is not None and len(d) >= 30:
                 ind_d = compute_indicators(d)
-                res = score_at_index(ind_d, len(ind_d) - 1)
+                _, bias = get_higher_tf_info(coin)
+                res = score_at_index(ind_d, len(ind_d) - 1, htf_bias=bias)
                 if abs(res['score']) > highest_abs_score:
                     highest_abs_score = abs(res['score'])
                     best_coin = (coin, res)
@@ -271,7 +352,8 @@ st.session_state.selected_symbol = symbol
 
 capital = st.sidebar.number_input("إجمالي رأس المال ($)", min_value=10.0, value=500.0, step=50.0)
 max_risk_per_trade_pct = st.sidebar.slider("أقصى مخاطرة في الصفقة (%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5)
-stop_distance_pct = st.sidebar.slider("مسافة وقف الخسارة (%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5)
+sl_mode = st.sidebar.radio("طريقة حساب وقف الخسارة", options=["ذكي حسب التقلب (ATR)", "نسبة مئوية ثابتة (%)"], index=0)
+stop_distance_pct = st.sidebar.slider("مسافة وقف الخسارة الثابتة (%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5)
 trailing_stop_enabled = st.sidebar.checkbox("تفعيل وقف الخسارة المتحرك", value=True)
 timeframe = st.sidebar.selectbox("الإطار الزمني", options=["1m", "5m", "15m"], index=1)
 refresh_rate = st.sidebar.selectbox("سرعة التحديث (ثانية)", options=[10, 15, 30, 60], index=1)
@@ -287,17 +369,27 @@ with tab_live:
             return
 
         ind_df = compute_indicators(df)
-        analysis = score_at_index(ind_df, len(ind_df) - 1)
-        htf_trend = get_higher_tf_trend(symbol)
+        htf_trend, htf_bias = get_higher_tf_info(symbol)
+        analysis = score_at_index(ind_df, len(ind_df) - 1, htf_bias=htf_bias)
 
         current_price = analysis['price']
         current_rsi = analysis['rsi']
+        current_adx = analysis['adx']
+        current_atr = analysis['atr']
         decision = analysis['decision']
         score = analysis['score']
         last_update = datetime.now().strftime("%H:%M:%S")
 
+        # تحديد مسافة وقف الخسارة (ذكي عبر ATR أو نسبة ثابتة)
+        if sl_mode == "ذكي حسب التقلب (ATR)" and current_atr > 0:
+            effective_sl_dist = max(current_atr * 2.0, current_price * 0.005)
+            effective_sl_pct = (effective_sl_dist / current_price) * 100.0
+        else:
+            effective_sl_pct = stop_distance_pct
+            effective_sl_dist = current_price * (effective_sl_pct / 100.0)
+
         risk_budget_usd = capital * (max_risk_per_trade_pct / 100.0)
-        calculated_position_usd = min(capital, risk_budget_usd / (stop_distance_pct / 100.0))
+        calculated_position_usd = min(capital, risk_budget_usd / (effective_sl_pct / 100.0))
 
         if decision == "BUY":
             signal_text = f"شراء (BUY) 🟢 | قوة {score}%"
@@ -312,11 +404,11 @@ with tab_live:
             signal_color = "#ffc107"
             btn_color_class = "🟡 دخول حذر (شراء)"
 
-        st.caption(f"🔄 آخر تحديث: **{last_update}** | الإطار: **{timeframe}** | الفريم الأعلى: **{htf_trend}** (كل {refresh_rate} ثانية)")
+        st.caption(f"🔄 آخر تحديث: **{last_update}** | الإطار: **{timeframe}** | الفريم الأعلى: **{htf_trend}** | قوة الترند ADX: **{current_adx:.1f}**")
 
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric(f"سعر {symbol}", format_price(current_price))
-        col2.metric("مؤشر القوة (RSI)", f"{current_rsi:.2f}")
+        col1.metric(f"سعر {symbol}", format_price(current_price), f"VWAP: {format_price(analysis['vwap'])}")
+        col2.metric("الزخم (RSI) / الترند (ADX)", f"{current_rsi:.1f} / {current_adx:.1f}")
         col3.metric("حجم الصفقة المقترح", f"${calculated_position_usd:,.2f}", f"مخاطرة قصوى ${risk_budget_usd:,.2f}")
 
         with col4:
@@ -326,7 +418,7 @@ with tab_live:
             </div>
             """, unsafe_allow_html=True)
 
-        with st.expander("📋 تفاصيل قراءة الخبير للمؤشرات الأربعة", expanded=True):
+        with st.expander("📋 تفاصيل قراءة المدارس السبع (أسباب القرار)", expanded=True):
             st.write(" • ".join([f"**{r}**" for r in analysis['reasons']]))
 
         st.markdown("---")
@@ -336,15 +428,15 @@ with tab_live:
             is_sell = (decision == "SELL")
 
             if is_sell:
-                suggested_sl = current_price * (1 + (stop_distance_pct / 100.0))
-                suggested_tp = current_price * (1 - (stop_distance_pct * 2 / 100.0))
-                sl_label = f"+{stop_distance_pct}%"
-                tp_label = f"-{stop_distance_pct * 2}%"
+                suggested_sl = current_price + effective_sl_dist
+                suggested_tp = current_price - (effective_sl_dist * 2.0)
+                sl_label = f"+{effective_sl_pct:.2f}%"
+                tp_label = f"-{effective_sl_pct * 2:.2f}%"
             else:
-                suggested_sl = current_price * (1 - (stop_distance_pct / 100.0))
-                suggested_tp = current_price * (1 + (stop_distance_pct * 2 / 100.0))
-                sl_label = f"-{stop_distance_pct}%"
-                tp_label = f"+{stop_distance_pct * 2}%"
+                suggested_sl = current_price - effective_sl_dist
+                suggested_tp = current_price + (effective_sl_dist * 2.0)
+                sl_label = f"-{effective_sl_pct:.2f}%"
+                tp_label = f"+{effective_sl_pct * 2:.2f}%"
 
             c1, c2, c3 = st.columns(3)
             c1.info(f"**سعر الدخول المتوقع:** {format_price(current_price)}")
@@ -355,7 +447,6 @@ with tab_live:
                 st.session_state.trade_active = True
                 st.session_state.entry_price = current_price
                 st.session_state.stop_loss = suggested_sl
-                st.session_state.initial_sl = suggested_sl
                 st.session_state.take_profit = suggested_tp
                 st.session_state.position_size_usd = calculated_position_usd
                 st.session_state.coins_bought = calculated_position_usd / current_price
@@ -370,11 +461,11 @@ with tab_live:
 
             if trailing_stop_enabled:
                 if t_type == "شراء":
-                    new_sl = current_price * (1 - (stop_distance_pct / 100.0))
+                    new_sl = current_price - effective_sl_dist
                     if new_sl > st.session_state.stop_loss:
                         st.session_state.stop_loss = new_sl
                 else:
-                    new_sl = current_price * (1 + (stop_distance_pct / 100.0))
+                    new_sl = current_price + effective_sl_dist
                     if new_sl < st.session_state.stop_loss:
                         st.session_state.stop_loss = new_sl
 
@@ -426,8 +517,9 @@ with tab_live:
         plot_df = df.tail(60).copy()
         plot_df['EMA 9'] = ind_df['ema9'].tail(60)
         plot_df['EMA 21'] = ind_df['ema21'].tail(60)
+        plot_df['VWAP (السيولة)'] = ind_df['vwap'].tail(60)
 
-        fig = px.line(plot_df, x='timestamp', y=['close', 'EMA 9', 'EMA 21'], title=f"الشارت اللحظي مع متوسطات الخبير - {symbol}")
+        fig = px.line(plot_df, x='timestamp', y=['close', 'EMA 9', 'EMA 21', 'VWAP (السيولة)'], title=f"الشارت اللحظي + خط سيولة VWAP - {symbol}")
         if st.session_state.trade_active:
             fig.add_hline(y=st.session_state.entry_price, line_dash="dash", line_color="blue", annotation_text="دخول")
             fig.add_hline(y=st.session_state.stop_loss, line_dash="dot", line_color="red", annotation_text="وقف الخسارة")
