@@ -1,106 +1,227 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
 import yfinance as yf
 import plotly.express as px
+import xml.etree.ElementTree as ET
 from datetime import datetime
+import re
 
-st.set_page_config(page_title="بوت التداول الفائق (7 مدارس تحليلية)", layout="wide")
+st.set_page_config(page_title="بوت التداول الذاتي (مدارس + أخبار آلية)", layout="wide")
 
 defaults = {
     "trade_active": False,
     "entry_price": 0.0,
     "stop_loss": 0.0,
-    "take_profit": 0.0,
-    "position_size_usd": 0.0,
+    "take_profit_1": 0.0,
+    "take_profit_2": 0.0,
+    "position_size_usdt": 0.0,
     "coins_bought": 0.0,
     "trade_symbol": "",
     "trade_type": "شراء",
-    "selected_symbol": "BTC-USD",
-    "trade_history": []
+    "selected_symbol": "BTCUSDT",
+    "trade_history": [],
+    "breakeven_triggered": False,
+    "auto_paused": False,
+    "pause_reason": ""
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-st.title("👑 بوت التداول الفائق (7 مدارس تحليلية + سيولة VWAP + فلتر ADX)")
+st.title("🤖 بوت التداول الذاتي المتطور (9 مدارس فنية + تحليل أخبار آلي)")
 
-WATCHLIST = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "NEAR-USD", "BNB-USD"]
+WATCHLIST_USDT = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "ADAUSDT",
+    "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "NEARUSDT", "SUIUSDT", "DOTUSDT"
+]
+
+BULLISH_KEYWORDS = [
+    "approval", "approved", "etf", "surge", "rally", "bull", "bullish", "adopt", "adoption",
+    "rate cut", "cut rates", "inflow", "breakout", "partnership", "launch", "record high", "all-time high"
+]
+
+BEARISH_KEYWORDS = [
+    "hack", "hacked", "exploit", "lawsuit", "sec", "ban", "banned", "crash", "plunge",
+    "bear", "bearish", "rate hike", "hike rates", "inflation", "outflow", "liquidation", "fraud", "delist"
+]
+
+HIGH_RISK_SHOCK_WORDS = [
+    "hack", "hacked", "exploit", "crash", "plunge", "ban", "banned", "liquidation", "emergency"
+]
 
 def format_price(val):
-    return f"${val:,.4f}" if abs(val) < 10 else f"${val:,.2f}"
+    return f"{val:,.4f} USDT" if abs(val) < 10 else f"{val:,.2f} USDT"
 
-def fetch_live_data(pair, period="5d", interval="5m"):
+def normalize_symbol_to_usdt(raw_sym):
+    s = raw_sym.strip().upper().replace("-USD", "").replace("/USDT", "").replace("-", "")
+    if not s.endswith("USDT"):
+        s = f"{s}USDT"
+    return s
+
+@st.cache_data(ttl=180)
+def fetch_auto_news_sentiment(symbol_usdt):
+    base_coin = symbol_usdt.replace("USDT", "").lower()
+    feeds = [
+        "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "https://cointelegraph.com/rss"
+    ]
+    headlines = []
+    news_score = 0
+    shock_detected = False
+    shock_title = ""
+
+    for feed_url in feeds:
+        try:
+            resp = requests.get(feed_url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200 and resp.text:
+                root = ET.fromstring(resp.text)
+                for item in root.findall(".//item")[:12]:
+                    title_el = item.find("title")
+                    if title_el is not None and title_el.text:
+                        title = re.sub(r"\s+", " ", title_el.text.strip())
+                        t_low = title.lower()
+                        weight = 1.5 if (base_coin in t_low or "bitcoin" in t_low or "crypto" in t_low or "fed" in t_low or "market" in t_low) else 0.75
+
+                        pos_hits = sum(1 for w in BULLISH_KEYWORDS if w in t_low)
+                        neg_hits = sum(1 for w in BEARISH_KEYWORDS if w in t_low)
+                        shock_hits = sum(1 for w in HIGH_RISK_SHOCK_WORDS if w in t_low)
+
+                        delta_s = (pos_hits - neg_hits) * 4.0 * weight
+                        news_score += delta_s
+
+                        if shock_hits > 0 and neg_hits > 0 and not shock_detected:
+                            shock_detected = True
+                            shock_title = title
+
+                        headlines.append((title, round(delta_s, 1)))
+        except Exception:
+            continue
+
+    news_score = int(max(-25, min(25, round(news_score))))
+    return {
+        "score": news_score,
+        "shock": shock_detected,
+        "shock_title": shock_title,
+        "count": len(headlines),
+        "top_items": headlines[:5]
+    }
+
+def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=150):
+    sym = normalize_symbol_to_usdt(symbol_usdt)
+
     try:
-        df = yf.download(pair, period=period, interval=interval, progress=False)
-        if df is None or df.empty:
-            return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df.reset_index()
-        time_col = 'Datetime' if 'Datetime' in df.columns else ('Date' if 'Date' in df.columns else df.columns[0])
-        df = df.rename(columns={
-            time_col: 'timestamp',
-            'Open': 'open',
-            'High': 'high',
-            'Low': 'low',
-            'Close': 'close',
-            'Volume': 'volume'
-        })
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        df = df.dropna(subset=['close', 'high', 'low']).reset_index(drop=True)
-        return df if not df.empty else None
+        url = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}"
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and len(data) > 20:
+                df = pd.DataFrame(data, columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'close_time', 'qav', 'trades', 'tbbav', 'tbqav', 'ignore'
+                ])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].dropna().reset_index(drop=True), "Binance"
     except Exception:
-        return None
+        pass
 
-def compute_indicators(df):
+    try:
+        base = sym.replace("USDT", "")
+        kc_pair = f"{base}-USDT"
+        kc_map = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "1hour"}
+        kc_tf = kc_map.get(interval, "5min")
+        url_kc = f"https://api.kucoin.com/api/v1/market/candles?type={kc_tf}&symbol={kc_pair}"
+        r_kc = requests.get(url_kc, timeout=5)
+        if r_kc.status_code == 200:
+            res_json = r_kc.json()
+            if res_json.get("code") == "200000" and res_json.get("data"):
+                raw = res_json["data"][:limit][::-1]
+                df = pd.DataFrame(raw, columns=['timestamp', 'open', 'close', 'high', 'low', 'volume', 'turnover'])
+                df['timestamp'] = pd.to_datetime(pd.to_numeric(df['timestamp']), unit='s')
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].dropna().reset_index(drop=True), "KuCoin"
+    except Exception:
+        pass
+
+    try:
+        base = sym.replace("USDT", "")
+        yf_pair = f"{base}-USD"
+        period = "5d" if interval in ["5m", "15m", "1h"] else "1d"
+        df = yf.download(yf_pair, period=period, interval=interval, progress=False)
+        if df is not None and not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df = df.reset_index()
+            time_col = 'Datetime' if 'Datetime' in df.columns else ('Date' if 'Date' in df.columns else df.columns[0])
+            df = df.rename(columns={
+                time_col: 'timestamp', 'Open': 'open', 'High': 'high',
+                'Low': 'low', 'Close': 'close', 'Volume': 'volume'
+            })
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].dropna().tail(limit).reset_index(drop=True)
+            if len(df) > 20:
+                return df, "Yahoo Finance"
+    except Exception:
+        pass
+
+    return None, None
+
+def compute_expert_indicators(df):
     close = df['close']
     high = df['high']
     low = df['low']
     volume = df['volume'].fillna(0)
 
-    # 1. RSI (14)
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
+    rsi_min = rsi.rolling(window=14).min()
+    rsi_max = rsi.rolling(window=14).max()
+    stoch_rsi = ((rsi - rsi_min) / (rsi_max - rsi_min).replace(0, np.nan)) * 100
 
-    # 2. EMA 9 & EMA 21
     ema9 = close.ewm(span=9, adjust=False).mean()
     ema21 = close.ewm(span=21, adjust=False).mean()
+    ema50 = close.ewm(span=50, adjust=False).mean()
 
-    # 3. MACD
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
     signal_line = macd.ewm(span=9, adjust=False).mean()
+    macd_hist = macd - signal_line
 
-    # 4. Bollinger Bands
     sma20 = close.rolling(window=20).mean()
     std20 = close.rolling(window=20).std()
     upper_band = sma20 + (std20 * 2)
     lower_band = sma20 - (std20 * 2)
 
-    # 5. VWAP (متوسط السعر المرجح بحجم التداول - مدرسة السيولة)
     typical_price = (high + low + close) / 3.0
     cum_vol = volume.rolling(window=48, min_periods=1).sum().replace(0, np.nan)
     cum_tp_vol = (typical_price * volume).rolling(window=48, min_periods=1).sum()
     vwap = (cum_tp_vol / cum_vol).fillna(close)
 
-    # 6. Volume Ratio (كشف انفجار السيولة)
-    vol_sma20 = volume.rolling(window=20).mean().replace(0, np.nan)
-    vol_ratio = (volume / vol_sma20).fillna(1.0)
+    raw_mf = typical_price * volume
+    pos_mf = np.where(typical_price > typical_price.shift(1), raw_mf, 0.0)
+    neg_mf = np.where(typical_price < typical_price.shift(1), raw_mf, 0.0)
+    pos_mf_sum = pd.Series(pos_mf, index=df.index).rolling(window=14).sum()
+    neg_mf_sum = pd.Series(neg_mf, index=df.index).rolling(window=14).sum().replace(0, np.nan)
+    mfi = 100 - (100 / (1 + (pos_mf_sum / neg_mf_sum)))
 
-    # 7. ATR (14) (قياس التقلب لضبط وقف الخسارة الذكي)
+    tenkan = (high.rolling(window=9).max() + low.rolling(window=9).min()) / 2.0
+    kijun = (high.rolling(window=26).max() + low.rolling(window=26).min()) / 2.0
+
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
     tr3 = (low - close.shift(1)).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = tr.rolling(window=14).mean().bfill()
 
-    # 8. ADX (14) (قياس قوة الترند ومنع التذبذب الوهمي)
     up_move = high.diff()
     down_move = -low.diff()
     plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
@@ -111,457 +232,494 @@ def compute_indicators(df):
     dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan))
     adx = dx.rolling(window=14).mean().fillna(20.0)
 
+    vol_sma20 = volume.rolling(window=20).mean().replace(0, np.nan)
+    vol_ratio = (volume / vol_sma20).fillna(1.0)
+
     return pd.DataFrame({
-        "close": close,
-        "rsi": rsi,
-        "ema9": ema9,
-        "ema21": ema21,
-        "macd": macd,
-        "signal_line": signal_line,
-        "upper_band": upper_band,
-        "lower_band": lower_band,
-        "vwap": vwap,
-        "vol_ratio": vol_ratio,
-        "atr": atr,
-        "adx": adx
+        "close": close, "rsi": rsi, "stoch_rsi": stoch_rsi,
+        "ema9": ema9, "ema21": ema21, "ema50": ema50,
+        "macd": macd, "signal_line": signal_line, "macd_hist": macd_hist,
+        "upper_band": upper_band, "lower_band": lower_band,
+        "vwap": vwap, "mfi": mfi, "tenkan": tenkan, "kijun": kijun,
+        "atr": atr, "adx": adx, "vol_ratio": vol_ratio
     })
 
-def score_at_index(ind_df, idx, htf_bias=0):
-    current_price = float(ind_df['close'].iloc[idx])
-    curr_rsi = float(ind_df['rsi'].iloc[idx]) if not pd.isna(ind_df['rsi'].iloc[idx]) else 50.0
-    curr_ema9 = float(ind_df['ema9'].iloc[idx])
-    curr_ema21 = float(ind_df['ema21'].iloc[idx])
-    curr_macd = float(ind_df['macd'].iloc[idx])
-    curr_sig = float(ind_df['signal_line'].iloc[idx])
-    upper_band = ind_df['upper_band'].iloc[idx]
-    lower_band = ind_df['lower_band'].iloc[idx]
-    curr_vwap = float(ind_df['vwap'].iloc[idx])
-    curr_vol_ratio = float(ind_df['vol_ratio'].iloc[idx])
-    curr_adx = float(ind_df['adx'].iloc[idx])
-    curr_atr = float(ind_df['atr'].iloc[idx])
+def autonomous_expert_decision(ind_df, idx, htf_bias=0, news_info=None):
+    if news_info is None:
+        news_info = {"score": 0, "shock": False, "shock_title": "", "count": 0}
+
+    price = float(ind_df['close'].iloc[idx])
+    rsi = float(ind_df['rsi'].iloc[idx]) if not pd.isna(ind_df['rsi'].iloc[idx]) else 50.0
+    s_rsi = float(ind_df['stoch_rsi'].iloc[idx]) if not pd.isna(ind_df['stoch_rsi'].iloc[idx]) else 50.0
+    mfi = float(ind_df['mfi'].iloc[idx]) if not pd.isna(ind_df['mfi'].iloc[idx]) else 50.0
+    ema9 = float(ind_df['ema9'].iloc[idx])
+    ema21 = float(ind_df['ema21'].iloc[idx])
+    ema50 = float(ind_df['ema50'].iloc[idx])
+    macd = float(ind_df['macd'].iloc[idx])
+    sig = float(ind_df['signal_line'].iloc[idx])
+    hist = float(ind_df['macd_hist'].iloc[idx])
+    prev_hist = float(ind_df['macd_hist'].iloc[idx - 1]) if idx > 0 else hist
+    vwap = float(ind_df['vwap'].iloc[idx])
+    tenkan = float(ind_df['tenkan'].iloc[idx]) if not pd.isna(ind_df['tenkan'].iloc[idx]) else price
+    kijun = float(ind_df['kijun'].iloc[idx]) if not pd.isna(ind_df['kijun'].iloc[idx]) else price
+    adx = float(ind_df['adx'].iloc[idx])
+    atr = float(ind_df['atr'].iloc[idx])
+    vol_ratio = float(ind_df['vol_ratio'].iloc[idx])
+    upper_b = ind_df['upper_band'].iloc[idx]
+    lower_b = ind_df['lower_band'].iloc[idx]
 
     score = 0
+    bull_conf = 0
+    bear_conf = 0
     reasons = []
 
-    # المدرسة 1: الزخم RSI
-    if curr_rsi < 35:
-        score += 20
-        reasons.append("تشبع بيعي قوي (RSI)")
-    elif curr_rsi < 45:
+    if ema9 > ema21 > ema50:
+        score += 18
+        bull_conf += 1
+        reasons.append("ترتيب متوسطات صاعد (EMA 9>21>50)")
+    elif ema9 < ema21 < ema50:
+        score -= 18
+        bear_conf += 1
+        reasons.append("ترتيب متوسطات هابط (EMA 9<21<50)")
+    elif ema9 > ema21:
+        score += 9
+        reasons.append("تقاطع صاعد سريع (EMA9 > EMA21)")
+    else:
+        score -= 9
+        reasons.append("تقاطع هابط سريع (EMA9 < EMA21)")
+
+    if price > tenkan > kijun:
+        score += 14
+        bull_conf += 1
+        reasons.append("توازن إيشيموكو إيجابي")
+    elif price < tenkan < kijun:
+        score -= 14
+        bear_conf += 1
+        reasons.append("توازن إيشيموكو سلبي")
+
+    if mfi < 28 or rsi < 32:
+        score += 16
+        bull_conf += 1
+        reasons.append(f"تجميع سيولة ذكية (MFI={mfi:.0f}, RSI={rsi:.0f})")
+    elif mfi > 72 or rsi > 68:
+        score -= 16
+        bear_conf += 1
+        reasons.append(f"تصريف سيولة وتشبع (MFI={mfi:.0f}, RSI={rsi:.0f})")
+
+    if s_rsi < 20 and hist > prev_hist:
         score += 10
-        reasons.append("منطقة تجميع جيدة (RSI)")
-    elif curr_rsi > 65:
-        score -= 20
-        reasons.append("تشبع شرائي مرتفع (RSI)")
-    elif curr_rsi > 55:
+        bull_conf += 1
+        reasons.append("انعكاس صاعد مبكر (StochRSI)")
+    elif s_rsi > 80 and hist < prev_hist:
         score -= 10
-        reasons.append("ضعف في زخم الصعود (RSI)")
+        bear_conf += 1
+        reasons.append("انعكاس هابط مبكر (StochRSI)")
 
-    # المدرسة 2: تقاطع المتوسطات EMA
-    if curr_ema9 > curr_ema21:
-        score += 20
-        reasons.append("اتجاه صاعد (EMA9 > EMA21)")
+    if macd > sig and hist > prev_hist:
+        score += 14
+        bull_conf += 1
+        reasons.append("تسارع إيجابي للماكد")
+    elif macd < sig and hist < prev_hist:
+        score -= 14
+        bear_conf += 1
+        reasons.append("تسارع سلبي للماكد")
+
+    if price > vwap:
+        score += 12
+        bull_conf += 1
+        reasons.append("فوق سيولة المؤسسات VWAP")
     else:
-        score -= 20
-        reasons.append("اتجاه هابط (EMA9 < EMA21)")
+        score -= 12
+        bear_conf += 1
+        reasons.append("تحت ضغط سيولة VWAP")
 
-    # المدرسة 3: الماكد MACD
-    if curr_macd > curr_sig:
-        score += 15
-        reasons.append("تقاطع إيجابي (MACD)")
-    else:
-        score -= 15
-        reasons.append("تقاطع سلبي (MACD)")
+    if vol_ratio >= 1.6:
+        reasons.append(f"قفزة سيولة ({vol_ratio:.1f}x)")
+        score += 8 if score > 0 else -8
 
-    # المدرسة 4: بولينجر باند
-    if not pd.isna(lower_band) and current_price <= float(lower_band) * 1.005:
-        score += 15
-        reasons.append("ارتداد من قاع بولينجر")
-    elif not pd.isna(upper_band) and current_price >= float(upper_band) * 0.995:
-        score -= 15
-        reasons.append("ملامسة قمة بولينجر")
+    if not pd.isna(lower_b) and price <= float(lower_b) * 1.003:
+        score += 10
+        reasons.append("قاع بولينجر")
+    elif not pd.isna(upper_b) and price >= float(upper_b) * 0.997:
+        score -= 10
+        reasons.append("قمة بولينجر")
 
-    # المدرسة 5: سيولة الحيتان VWAP + Volume
-    if current_price > curr_vwap:
-        score += 15
-        reasons.append("السعر فوق خط سيولة المؤسسات (VWAP)")
-    else:
-        score -= 15
-        reasons.append("السعر تحت خط سيولة المؤسسات (VWAP)")
-
-    if curr_vol_ratio >= 1.5:
-        reasons.append(f"انفجار في حجم التداول ({curr_vol_ratio:.1f}x)")
-        score += 10 if score > 0 else -10
-
-    # المدرسة 6: التوافق مع الفريم الأعلى
     if htf_bias > 0:
-        score += 10
-        reasons.append("متوافق مع صعود فريم الساعة")
+        score += 12
+        bull_conf += 1
+        reasons.append("دعم فريم الساعة الصاعد")
     elif htf_bias < 0:
-        score -= 10
-        reasons.append("متوافق مع هبوط فريم الساعة")
+        score -= 12
+        bear_conf += 1
+        reasons.append("دعم فريم الساعة الهابط")
 
-    # المدرسة 7: فلتر قوة الترند ADX
-    if curr_adx < 18:
-        score = int(score * 0.6)
-        reasons.append(f"سوق عرضي ضعيف (ADX={curr_adx:.1f}) - تم تخفيف الإشارة للحماية")
-    elif curr_adx >= 25:
-        reasons.append(f"ترند قوي ومؤكد (ADX={curr_adx:.1f})")
+    # المدرسة العاشرة: تحليل الأخبار آلياً
+    n_score = news_info["score"]
+    if n_score > 0:
+        score += n_score
+        bull_conf += 1
+        reasons.append(f"أخبار داعمة آلياً (+{n_score})")
+    elif n_score < 0:
+        score += n_score
+        bear_conf += 1
+        reasons.append(f"ضغط أخبار سلبية آلياً ({n_score})")
+
+    if adx < 18:
+        score = int(score * 0.55)
+        reasons.append(f"ترند عرضي ضعيف (ADX={adx:.1f})")
+    elif adx >= 25:
+        reasons.append(f"ترند قوي (ADX={adx:.1f})")
 
     score = max(-100, min(100, score))
 
-    if score >= 30:
+    if news_info["shock"]:
+        decision = "HOLD_SHOCK"
+        quality = "توقف تلقائي بسبب خبر عاجل عالي الخطورة 🚨"
+    elif score >= 45 and bull_conf >= 4 and adx >= 18:
         decision = "BUY"
-    elif score <= -30:
+        quality = "فرصة شراء ذهبية مؤيدة بالمدارس والأخبار ⭐⭐⭐"
+    elif score <= -45 and bear_conf >= 4 and adx >= 18:
         decision = "SELL"
+        quality = "فرصة بيع ذهبية مؤيدة بالمدارس والأخبار ⭐⭐⭐"
+    elif score >= 30:
+        decision = "BUY_WEAK"
+        quality = "شراء متوسط ⭐"
+    elif score <= -30:
+        decision = "SELL_WEAK"
+        quality = "بيع متوسط ⭐"
     else:
         decision = "NEUTRAL"
+        quality = "انتظار — البوت يراقب ولا يغامر"
 
     return {
-        "price": current_price,
-        "rsi": curr_rsi,
-        "adx": curr_adx,
-        "atr": curr_atr,
-        "vwap": curr_vwap,
-        "score": score,
-        "decision": decision,
-        "reasons": reasons
+        "price": price, "rsi": rsi, "mfi": mfi, "adx": adx, "atr": atr, "vwap": vwap,
+        "score": score, "decision": decision, "quality": quality,
+        "bull_conf": bull_conf, "bear_conf": bear_conf, "reasons": reasons
     }
 
-def get_higher_tf_info(pair):
-    df_1h = fetch_live_data(pair, period="5d", interval="1h")
-    if df_1h is None or len(df_1h) < 22:
+def get_htf_bias_usdt(symbol_usdt):
+    df_1h, _ = fetch_usdt_ohlcv(symbol_usdt, interval="1h", limit=60)
+    if df_1h is None or len(df_1h) < 30:
         return "غير محدد", 0
     ema20 = df_1h['close'].ewm(span=20, adjust=False).mean()
-    last_close = float(df_1h['close'].iloc[-1])
-    last_ema = float(ema20.iloc[-1])
-    if last_close > last_ema * 1.003:
+    ema50 = df_1h['close'].ewm(span=50, adjust=False).mean()
+    c = float(df_1h['close'].iloc[-1])
+    e20 = float(ema20.iloc[-1])
+    e50 = float(ema50.iloc[-1])
+    if c > e20 > e50:
         return "صاعد على فريم الساعة 🟢", 1
-    elif last_close < last_ema * 0.997:
+    elif c < e20 < e50:
         return "هابط على فريم الساعة 🔴", -1
-    return "عرضي على فريم الساعة 🟡", 0
-
-def run_backtest(df, pos_usd, sl_pct, tp_pct):
-    if df is None or len(df) < 40:
-        return None
-    ind = compute_indicators(df)
-    trades = []
-    in_pos = False
-    pos_side = None
-    entry = 0.0
-    sl = 0.0
-    tp = 0.0
-    coins = 0.0
-    equity = 0.0
-    peak_equity = 0.0
-    max_dd = 0.0
-
-    for i in range(30, len(ind)):
-        price = float(ind['close'].iloc[i])
-        res = score_at_index(ind, i, htf_bias=0)
-
-        if not in_pos:
-            if res['decision'] == "BUY":
-                in_pos = True
-                pos_side = "شراء"
-                entry = price
-                sl = entry * (1 - sl_pct / 100.0)
-                tp = entry * (1 + tp_pct / 100.0)
-                coins = pos_usd / entry
-            elif res['decision'] == "SELL":
-                in_pos = True
-                pos_side = "بيع"
-                entry = price
-                sl = entry * (1 + sl_pct / 100.0)
-                tp = entry * (1 - tp_pct / 100.0)
-                coins = pos_usd / entry
-        else:
-            exit_reason = None
-            if pos_side == "شراء":
-                if price <= sl:
-                    exit_reason = "وقف خسارة"
-                elif price >= tp:
-                    exit_reason = "هدف ربح"
-                elif res['decision'] == "SELL":
-                    exit_reason = "إشارة عكسية"
-            else:
-                if price >= sl:
-                    exit_reason = "وقف خسارة"
-                elif price <= tp:
-                    exit_reason = "هدف ربح"
-                elif res['decision'] == "BUY":
-                    exit_reason = "إشارة عكسية"
-
-            if exit_reason:
-                pnl = (price - entry) * coins if pos_side == "شراء" else (entry - price) * coins
-                pnl_pct = ((price - entry) / entry * 100) if pos_side == "شراء" else ((entry - price) / entry * 100)
-                equity += pnl
-                peak_equity = max(peak_equity, equity)
-                max_dd = min(max_dd, equity - peak_equity)
-                trades.append({
-                    "النوع": pos_side,
-                    "الدخول": round(entry, 4 if entry < 10 else 2),
-                    "الخروج": round(price, 4 if price < 10 else 2),
-                    "السبب": exit_reason,
-                    "الربح/الخسارة ($)": round(pnl, 2),
-                    "النسبة (%)": round(pnl_pct, 2)
-                })
-                in_pos = False
-
-    if not trades:
-        return {"count": 0, "win_rate": 0.0, "net_pnl": 0.0, "max_dd": 0.0, "log": pd.DataFrame()}
-
-    tdf = pd.DataFrame(trades)
-    wins = int((tdf["الربح/الخسارة ($)"] > 0).sum())
-    return {
-        "count": len(tdf),
-        "win_rate": (wins / len(tdf)) * 100.0,
-        "net_pnl": float(tdf["الربح/الخسارة ($)"].sum()),
-        "max_dd": float(max_dd),
-        "log": tdf
-    }
+    return "متذبذب على فريم الساعة 🟡", 0
 
 # الشريط الجانبي
-st.sidebar.header("📡 رادار اقتناص الفرص الحية")
-if st.sidebar.button("🔍 ابحث لي عن أفضل عملة الآن", type="primary", use_container_width=True):
-    with st.sidebar.status("جاري مسح السوق وتحليل 10 عملات بـ 7 مدارس..."):
-        best_coin = None
-        highest_abs_score = 0
-        for coin in WATCHLIST:
-            d = fetch_live_data(coin, period="2d", interval="5m")
-            if d is not None and len(d) >= 30:
-                ind_d = compute_indicators(d)
-                _, bias = get_higher_tf_info(coin)
-                res = score_at_index(ind_d, len(ind_d) - 1, htf_bias=bias)
-                if abs(res['score']) > highest_abs_score:
-                    highest_abs_score = abs(res['score'])
-                    best_coin = (coin, res)
+st.sidebar.header("📡 رادار الفرص الذهبية (USDT)")
+if st.sidebar.button("🔍 افحص 12 عملة واقتنص أقوى فرصة", type="primary", use_container_width=True):
+    with st.sidebar.status("البوت يحلل المؤشرات والأخبار آلياً..."):
+        ranked = []
+        for coin in WATCHLIST_USDT:
+            d, _ = fetch_usdt_ohlcv(coin, interval="5m", limit=100)
+            if d is not None and len(d) >= 40:
+                ind_d = compute_expert_indicators(d)
+                _, bias = get_htf_bias_usdt(coin)
+                n_info = fetch_auto_news_sentiment(coin)
+                res = autonomous_expert_decision(ind_d, len(ind_d) - 1, htf_bias=bias, news_info=n_info)
+                ranked.append({
+                    "العملة": coin,
+                    "القوة": res['score'],
+                    "أخبار": n_info['score'],
+                    "ADX": round(res['adx'], 1),
+                    "القرار": res['decision'],
+                    "الجودة": res['quality']
+                })
 
-        if best_coin and highest_abs_score >= 30:
-            coin_name, coin_data = best_coin
-            st.session_state.selected_symbol = coin_name
-            action_ar = "شراء 🟢" if coin_data['decision'] == "BUY" else "بيع 🔴"
-            st.sidebar.success(f"🎯 **أفضل فرصة الآن: {coin_name}**\n\nالتوصية: **{action_ar}** بقوة **{abs(coin_data['score'])}%**")
-        else:
-            st.sidebar.warning("السوق هادئ حالياً، لا توجد عملة وصلت لقوة إشارة عالية.")
+        if ranked:
+            rdf = pd.DataFrame(ranked)
+            rdf['abs_s'] = rdf['القوة'].abs()
+            rdf = rdf.sort_values(by='abs_s', ascending=False).reset_index(drop=True)
+            top = rdf.iloc[0]
+
+            if top['القرار'] == "HOLD_SHOCK":
+                st.sidebar.error("🚨 تم رصد خبر عاجل عالي الخطورة؛ البوت يوصي بالتوقف المؤقت حالياً.")
+            elif top['abs_s'] >= 30:
+                st.session_state.selected_symbol = top['العملة']
+                d_txt = "شراء 🟢" if top['القوة'] > 0 else "بيع 🔴"
+                st.sidebar.success(
+                    f"🏆 **أفضل فرصة الآن: {top['العملة']}**\n\n"
+                    f"الاتجاه: **{d_txt}** | التقييم: **{int(top['abs_s'])}/100**\n\n"
+                    f"{top['الجودة']}"
+                )
+            else:
+                st.sidebar.warning("السوق في حالة ترقب ولا توجد فرصة عالية الدقة الآن.")
+
+            st.sidebar.dataframe(rdf[['العملة', 'القوة', 'أخبار', 'ADX']].head(6), use_container_width=True, hide_index=True)
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ إعدادات الصفقة والمخاطر")
-symbol = st.sidebar.text_input("رمز العملة", value=st.session_state.selected_symbol).upper()
+st.sidebar.header("⚙️ إعدادات الصفقة وإدارة رأس المال")
+raw_input = st.sidebar.text_input("رمز العملة (USDT)", value=st.session_state.selected_symbol)
+symbol = normalize_symbol_to_usdt(raw_input)
 st.session_state.selected_symbol = symbol
 
-capital = st.sidebar.number_input("إجمالي رأس المال ($)", min_value=10.0, value=500.0, step=50.0)
-max_risk_per_trade_pct = st.sidebar.slider("أقصى مخاطرة في الصفقة (%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5)
-sl_mode = st.sidebar.radio("طريقة حساب وقف الخسارة", options=["ذكي حسب التقلب (ATR)", "نسبة مئوية ثابتة (%)"], index=0)
-stop_distance_pct = st.sidebar.slider("مسافة وقف الخسارة الثابتة (%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5)
-trailing_stop_enabled = st.sidebar.checkbox("تفعيل وقف الخسارة المتحرك", value=True)
+capital_usdt = st.sidebar.number_input("إجمالي رأس المال (USDT)", min_value=10.0, value=500.0, step=50.0)
+max_risk_pct = st.sidebar.slider("المخاطرة القصوى في الصفقة (%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5)
+sl_mode = st.sidebar.radio("حساب وقف الخسارة", options=["ذكي حسب التقلب (ATR)", "نسبة ثابتة (%)"], index=0)
+fixed_sl_pct = st.sidebar.slider("نسبة وقف الخسارة الثابتة (%)", min_value=0.5, max_value=10.0, value=1.5, step=0.5)
+auto_advance_and_pause = st.sidebar.checkbox("تفعيل القرار الذاتي لتقدّم وتوقّف الصفقة", value=True)
 timeframe = st.sidebar.selectbox("الإطار الزمني", options=["1m", "5m", "15m"], index=1)
 refresh_rate = st.sidebar.selectbox("سرعة التحديث (ثانية)", options=[10, 15, 30, 60], index=1)
 
-tab_live, tab_backtest = st.tabs(["📡 غرفة التداول اللحظية", "🧪 مختبر الاختبار التاريخي (Backtest)"])
+# لوحة التداول اللحظية الذاتية
+@st.fragment(run_every=refresh_rate)
+def live_trading_dashboard():
+    df, data_source = fetch_usdt_ohlcv(symbol, interval=timeframe, limit=150)
+    if df is None or len(df) < 40:
+        st.error(f"تعذر جلب بيانات كافية للزوج {symbol}.")
+        return
 
-with tab_live:
-    @st.fragment(run_every=refresh_rate)
-    def live_trading_dashboard():
-        df = fetch_live_data(symbol, period="2d", interval=timeframe)
-        if df is None or len(df) < 30:
-            st.error(f"تعذر جلب بيانات كافية للعملة {symbol}.")
-            return
+    ind_df = compute_expert_indicators(df)
+    htf_text, htf_bias = get_htf_bias_usdt(symbol)
+    news_info = fetch_auto_news_sentiment(symbol)
+    analysis = autonomous_expert_decision(ind_df, len(ind_df) - 1, htf_bias=htf_bias, news_info=news_info)
 
-        ind_df = compute_indicators(df)
-        htf_trend, htf_bias = get_higher_tf_info(symbol)
-        analysis = score_at_index(ind_df, len(ind_df) - 1, htf_bias=htf_bias)
+    price = analysis['price']
+    rsi = analysis['rsi']
+    mfi = analysis['mfi']
+    adx = analysis['adx']
+    atr = analysis['atr']
+    score = analysis['score']
+    decision = analysis['decision']
+    last_update = datetime.now().strftime("%H:%M:%S")
 
-        current_price = analysis['price']
-        current_rsi = analysis['rsi']
-        current_adx = analysis['adx']
-        current_atr = analysis['atr']
-        decision = analysis['decision']
-        score = analysis['score']
-        last_update = datetime.now().strftime("%H:%M:%S")
+    if sl_mode == "ذكي حسب التقلب (ATR)" and atr > 0:
+        sl_dist = max(atr * 2.0, price * 0.005)
+        sl_pct = (sl_dist / price) * 100.0
+    else:
+        sl_pct = fixed_sl_pct
+        sl_dist = price * (sl_pct / 100.0)
 
-        # تحديد مسافة وقف الخسارة (ذكي عبر ATR أو نسبة ثابتة)
-        if sl_mode == "ذكي حسب التقلب (ATR)" and current_atr > 0:
-            effective_sl_dist = max(current_atr * 2.0, current_price * 0.005)
-            effective_sl_pct = (effective_sl_dist / current_price) * 100.0
+    risk_usdt = capital_usdt * (max_risk_pct / 100.0)
+    pos_usdt = min(capital_usdt, risk_usdt / (sl_pct / 100.0))
+
+    if decision == "HOLD_SHOCK":
+        sig_label = "توقف تلقائي (خبر عاجل) 🚨"
+        sig_color = "#842029"
+        btn_tag = "🚨 خطر إخباري"
+    elif decision == "BUY":
+        sig_label = f"شراء قوي (BUY) 🟢 | {score}/100"
+        sig_color = "#198754"
+        btn_tag = "🟢 شراء مؤكد"
+    elif decision == "BUY_WEAK":
+        sig_label = f"شراء متوسط 🟢 | {score}/100"
+        sig_color = "#20c997"
+        btn_tag = "🟢 شراء متوسط"
+    elif decision == "SELL":
+        sig_label = f"بيع قوي (SELL) 🔴 | {abs(score)}/100"
+        sig_color = "#dc3545"
+        btn_tag = "🔴 بيع مؤكد"
+    elif decision == "SELL_WEAK":
+        sig_label = f"بيع متوسط 🔴 | {abs(score)}/100"
+        sig_color = "#fd7e14"
+        btn_tag = "🔴 بيع متوسط"
+    else:
+        sig_label = f"انتظار ذكي ⏳ | {score}"
+        sig_color = "#6c757d"
+        btn_tag = "🟡 دخول حذر"
+
+    st.caption(
+        f"📡 المصدر: **{data_source}** | آخر تحديث: **{last_update}** | الفريم: **{timeframe}** | "
+        f"الاتجاه العام: **{htf_text}** | مؤشر الأخبار الآلي: **{news_info['score']:+d}**"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(f"سعر {symbol}", format_price(price), f"VWAP: {format_price(analysis['vwap'])}")
+    c2.metric("السيولة (MFI) / الزخم (RSI)", f"{mfi:.0f} / {rsi:.0f}")
+    c3.metric("حجم الصفقة المقترح", f"{pos_usdt:,.2f} USDT", f"مخاطرة قصوى {risk_usdt:,.2f} USDT")
+
+    with c4:
+        st.markdown(f"""
+        <div style="background-color: {sig_color}; padding: 12px; border-radius: 10px; text-align: center; color: white; font-weight: bold; font-size: 15px; box-shadow: 0px 0px 12px {sig_color};">
+            {sig_label}<br><span style="font-size: 12px; font-weight: normal;">{analysis['quality']}</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with st.expander(f"🧠 قراءة البوت الذاتية (المدارس + الأخبار | {analysis['bull_conf']} إيجابية / {analysis['bear_conf']} سلبية)", expanded=True):
+        st.write(" • ".join([f"**{r}**" for r in analysis['reasons']]))
+        if news_info["shock"] and news_info["shock_title"]:
+            st.error(f"📰 **خبر صادم مرصود آلياً:** {news_info['shock_title']}")
+
+    st.markdown("---")
+
+    if not st.session_state.trade_active:
+        st.subheader(f"🚀 إعداد الصفقة الجديدة على {symbol}")
+        is_sell = decision in ["SELL", "SELL_WEAK"]
+
+        if is_sell:
+            sl_price = price + sl_dist
+            tp1_price = price - (sl_dist * 1.5)
+            tp2_price = price - (sl_dist * 2.5)
+            sl_txt = f"+{sl_pct:.2f}%"
+            tp1_txt = f"-{sl_pct * 1.5:.2f}%"
+            tp2_txt = f"-{sl_pct * 2.5:.2f}%"
         else:
-            effective_sl_pct = stop_distance_pct
-            effective_sl_dist = current_price * (effective_sl_pct / 100.0)
+            sl_price = price - sl_dist
+            tp1_price = price + (sl_dist * 1.5)
+            tp2_price = price + (sl_dist * 2.5)
+            sl_txt = f"-{sl_pct:.2f}%"
+            tp1_txt = f"+{sl_pct * 1.5:.2f}%"
+            tp2_txt = f"+{sl_pct * 2.5:.2f}%"
 
-        risk_budget_usd = capital * (max_risk_per_trade_pct / 100.0)
-        calculated_position_usd = min(capital, risk_budget_usd / (effective_sl_pct / 100.0))
+        p1, p2, p3, p4 = st.columns(4)
+        p1.info(f"**سعر الدخول:**\n\n{format_price(price)}")
+        p2.warning(f"**وقف الخسارة ({sl_txt}):**\n\n{format_price(sl_price)}")
+        p3.success(f"**الهدف الأول ({tp1_txt}):**\n\n{format_price(tp1_price)}")
+        p4.success(f"**الهدف الثاني ({tp2_txt}):**\n\n{format_price(tp2_price)}")
 
-        if decision == "BUY":
-            signal_text = f"شراء (BUY) 🟢 | قوة {score}%"
-            signal_color = "#28a745"
-            btn_color_class = "🟢 شراء"
-        elif decision == "SELL":
-            signal_text = f"بيع (SELL) 🔴 | قوة {abs(score)}%"
-            signal_color = "#dc3545"
-            btn_color_class = "🔴 بيع"
+        if st.button(f"✅ بدء الصفقة الآن ({btn_tag}) بمبلغ {pos_usdt:,.2f} USDT", type="primary", use_container_width=True):
+            st.session_state.trade_active = True
+            st.session_state.entry_price = price
+            st.session_state.stop_loss = sl_price
+            st.session_state.take_profit_1 = tp1_price
+            st.session_state.take_profit_2 = tp2_price
+            st.session_state.position_size_usdt = pos_usdt
+            st.session_state.coins_bought = pos_usdt / price
+            st.session_state.trade_symbol = symbol
+            st.session_state.trade_type = "بيع" if is_sell else "شراء"
+            st.session_state.breakeven_triggered = False
+            st.session_state.auto_paused = False
+            st.session_state.pause_reason = ""
+            st.rerun()
+
+    else:
+        t_type = st.session_state.trade_type
+        entry = st.session_state.entry_price
+        coins = st.session_state.coins_bought
+        pos_usdt = st.session_state.position_size_usdt
+        tp1 = st.session_state.take_profit_1
+        tp2 = st.session_state.take_profit_2
+
+        # القرار الذاتي لتقدّم الصفقة وتأمينها أو إيقافها
+        advanced_note = ""
+        st.session_state.auto_paused = False
+        st.session_state.pause_reason = ""
+
+        if auto_advance_and_pause:
+            if t_type == "شراء":
+                # تقدّم الصفقة وتأمينها تلقائياً
+                if price >= entry + (tp1 - entry) * 0.55 and not st.session_state.breakeven_triggered:
+                    st.session_state.stop_loss = max(st.session_state.stop_loss, entry * 1.001)
+                    st.session_state.breakeven_triggered = True
+                    advanced_note = " — تم تأمين الوقف فوق نقطة الدخول تلقائياً"
+                # دفع الوقف للأمام عند دعم الأخبار الإيجابية أو اختراق TP1
+                if (news_info["score"] >= 8 or price >= tp1) and price > entry:
+                    pushed_sl = max(st.session_state.stop_loss, price - (sl_dist * 0.85))
+                    if pushed_sl > st.session_state.stop_loss:
+                        st.session_state.stop_loss = pushed_sl
+                        advanced_note = " — البوت يدفع الصفقة للأمام نحو الهدف الثاني"
+
+                # شروط التوقف الذاتي
+                if news_info["shock"] or news_info["score"] <= -12:
+                    st.session_state.auto_paused = True
+                    st.session_state.pause_reason = "خبر اقتصادي/سوقي سلبي قوي؛ البوت يوصي بتوقف الصفقة فوراً."
+                elif decision in ["SELL", "SELL_WEAK"] and score <= -35:
+                    st.session_state.auto_paused = True
+                    st.session_state.pause_reason = "انعكاس فني وإخباري ضد صفقة الشراء؛ البوت يوصي بالإغلاق."
+            else:
+                if price <= entry - (entry - tp1) * 0.55 and not st.session_state.breakeven_triggered:
+                    st.session_state.stop_loss = min(st.session_state.stop_loss, entry * 0.999)
+                    st.session_state.breakeven_triggered = True
+                    advanced_note = " — تم تأمين الوقف تحت نقطة الدخول تلقائياً"
+                if (news_info["score"] <= -8 or price <= tp1) and price < entry:
+                    pushed_sl = min(st.session_state.stop_loss, price + (sl_dist * 0.85))
+                    if pushed_sl < st.session_state.stop_loss:
+                        st.session_state.stop_loss = pushed_sl
+                        advanced_note = " — البوت يدفع صفقة البيع للأمام نحو الهدف الثاني"
+
+                if news_info["shock"] or news_info["score"] >= 12:
+                    st.session_state.auto_paused = True
+                    st.session_state.pause_reason = "خبر إيجابي مفاجئ ضد صفقة البيع؛ البوت يوصي بتوقف الصفقة فوراً."
+                elif decision in ["BUY", "BUY_WEAK"] and score >= 35:
+                    st.session_state.auto_paused = True
+                    st.session_state.pause_reason = "انعكاس فني وإخباري ضد صفقة البيع؛ البوت يوصي بالإغلاق."
+
+        sl = st.session_state.stop_loss
+
+        if t_type == "بيع":
+            pnl_usdt = (entry - price) * coins
+            pnl_pct = ((entry - price) / entry) * 100.0
+            hit_sl = price >= sl
+            hit_tp1 = price <= tp1
+            hit_tp2 = price <= tp2
         else:
-            signal_text = f"انتظار / تذبذب ⏳ | {score}"
-            signal_color = "#ffc107"
-            btn_color_class = "🟡 دخول حذر (شراء)"
+            pnl_usdt = (price - entry) * coins
+            pnl_pct = ((price - entry) / entry) * 100.0
+            hit_sl = price <= sl
+            hit_tp1 = price >= tp1
+            hit_tp2 = price >= tp2
 
-        st.caption(f"🔄 آخر تحديث: **{last_update}** | الإطار: **{timeframe}** | الفريم الأعلى: **{htf_trend}** | قوة الترند ADX: **{current_adx:.1f}**")
+        st.subheader(f"📡 متابعة الصفقة الذاتية: {st.session_state.trade_symbol} ({t_type}) | {pos_usdt:,.2f} USDT")
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric(f"سعر {symbol}", format_price(current_price), f"VWAP: {format_price(analysis['vwap'])}")
-        col2.metric("الزخم (RSI) / الترند (ADX)", f"{current_rsi:.1f} / {current_adx:.1f}")
-        col3.metric("حجم الصفقة المقترح", f"${calculated_position_usd:,.2f}", f"مخاطرة قصوى ${risk_budget_usd:,.2f}")
+        if hit_sl:
+            st.error("🚨 **توقّف الصفقة (وقف الخسارة)!** السعر بلغ مستوى الإيقاف. اضغط **خروج الآن**.")
+        elif st.session_state.auto_paused:
+            st.error(f"🛑 **قرار توقّف ذاتي من البوت:** {st.session_state.pause_reason} اضغط **خروج الآن**.")
+        elif hit_tp2:
+            st.success("🏆 **تحقق الهدف الثاني (TP2)!** يُنصح بإغلاق الصفقة وجني الأرباح الآن.")
+        elif hit_tp1:
+            st.success(f"🎯 **تحقق الهدف الأول (TP1)!** الصفقة تتقدم نحو الهدف الثاني{advanced_note}.")
+        else:
+            st.info(f"🟢 **الصفقة تتقدم تحت المراقبة الذاتية...**{advanced_note}")
 
-        with col4:
-            st.markdown(f"""
-            <div style="background-color: {signal_color}; padding: 12px; border-radius: 8px; text-align: center; color: white; font-weight: bold; font-size: 16px; box-shadow: 0px 0px 12px {signal_color};">
-                {signal_text}
-            </div>
-            """, unsafe_allow_html=True)
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("الدخول", format_price(entry))
+        m2.metric("الربح / الخسارة", f"{pnl_usdt:,.2f} USDT", f"{pnl_pct:.2f}%")
+        m3.metric("الوقف الحالي", format_price(sl))
+        m4.metric("الهدف 1", format_price(tp1))
+        m5.metric("الهدف 2", format_price(tp2))
 
-        with st.expander("📋 تفاصيل قراءة المدارس السبع (أسباب القرار)", expanded=True):
-            st.write(" • ".join([f"**{r}**" for r in analysis['reasons']]))
+        if st.button("🚨 خروج الآن (إغلاق الصفقة وتسجيل النتيجة)", type="primary", use_container_width=True):
+            st.session_state.trade_history.append({
+                "الوقت": datetime.now().strftime("%H:%M:%S"),
+                "الزوج": st.session_state.trade_symbol,
+                "النوع": t_type,
+                "الدخول": round(entry, 4 if entry < 10 else 2),
+                "الخروج": round(price, 4 if price < 10 else 2),
+                "النتيجة (USDT)": round(pnl_usdt, 2),
+                "النسبة (%)": round(pnl_pct, 2)
+            })
+            st.session_state.trade_active = False
+            st.session_state.auto_paused = False
+            st.rerun()
 
+    st.markdown("---")
+    plot_df = df.tail(65).copy()
+    plot_df['EMA 9'] = ind_df['ema9'].tail(65)
+    plot_df['EMA 21'] = ind_df['ema21'].tail(65)
+    plot_df['EMA 50'] = ind_df['ema50'].tail(65)
+    plot_df['VWAP'] = ind_df['vwap'].tail(65)
+
+    fig = px.line(
+        plot_df, x='timestamp', y=['close', 'EMA 9', 'EMA 21', 'EMA 50', 'VWAP'],
+        title=f"الشارت اللحظي (المتوسطات + سيولة VWAP) — {symbol}"
+    )
+    if st.session_state.trade_active:
+        fig.add_hline(y=st.session_state.entry_price, line_dash="dash", line_color="blue", annotation_text="دخول")
+        fig.add_hline(y=st.session_state.stop_loss, line_dash="dot", line_color="red", annotation_text="وقف الخسارة")
+        fig.add_hline(y=st.session_state.take_profit_1, line_dash="dot", line_color="orange", annotation_text="هدف 1")
+        fig.add_hline(y=st.session_state.take_profit_2, line_dash="dot", line_color="green", annotation_text="هدف 2")
+    st.plotly_chart(fig, use_container_width=True)
+
+    if st.session_state.trade_history:
         st.markdown("---")
+        st.subheader("📒 سجل صفقات الجلسة (USDT)")
+        hist_df = pd.DataFrame(st.session_state.trade_history)
+        total_pnl = hist_df["النتيجة (USDT)"].sum()
+        wins = int((hist_df["النتيجة (USDT)"] > 0).sum())
+        win_rate = (wins / len(hist_df)) * 100.0
 
-        if not st.session_state.trade_active:
-            st.subheader(f"🚀 بدء صفقة جديدة على {symbol}")
-            is_sell = (decision == "SELL")
+        s1, s2, s3 = st.columns(3)
+        s1.metric("الصفقات المغلقة", len(hist_df))
+        s2.metric("نسبة النجاح (Win Rate)", f"{win_rate:.1f}%")
+        s3.metric("صافي الجلسة", f"{total_pnl:,.2f} USDT")
+        st.dataframe(hist_df, use_container_width=True, hide_index=True)
 
-            if is_sell:
-                suggested_sl = current_price + effective_sl_dist
-                suggested_tp = current_price - (effective_sl_dist * 2.0)
-                sl_label = f"+{effective_sl_pct:.2f}%"
-                tp_label = f"-{effective_sl_pct * 2:.2f}%"
-            else:
-                suggested_sl = current_price - effective_sl_dist
-                suggested_tp = current_price + (effective_sl_dist * 2.0)
-                sl_label = f"-{effective_sl_pct:.2f}%"
-                tp_label = f"+{effective_sl_pct * 2:.2f}%"
-
-            c1, c2, c3 = st.columns(3)
-            c1.info(f"**سعر الدخول المتوقع:** {format_price(current_price)}")
-            c2.warning(f"**وقف الخسارة ({sl_label}):** {format_price(suggested_sl)}")
-            c3.success(f"**هدف الربح ({tp_label}):** {format_price(suggested_tp)}")
-
-            if st.button(f"✅ بدء الصفقة الآن ({btn_color_class}) بحجم ${calculated_position_usd:,.2f}", type="primary", use_container_width=True):
-                st.session_state.trade_active = True
-                st.session_state.entry_price = current_price
-                st.session_state.stop_loss = suggested_sl
-                st.session_state.take_profit = suggested_tp
-                st.session_state.position_size_usd = calculated_position_usd
-                st.session_state.coins_bought = calculated_position_usd / current_price
-                st.session_state.trade_symbol = symbol
-                st.session_state.trade_type = "بيع" if is_sell else "شراء"
-                st.rerun()
-        else:
-            t_type = st.session_state.trade_type
-            entry = st.session_state.entry_price
-            coins = st.session_state.coins_bought
-            pos_usd = st.session_state.position_size_usd
-
-            if trailing_stop_enabled:
-                if t_type == "شراء":
-                    new_sl = current_price - effective_sl_dist
-                    if new_sl > st.session_state.stop_loss:
-                        st.session_state.stop_loss = new_sl
-                else:
-                    new_sl = current_price + effective_sl_dist
-                    if new_sl < st.session_state.stop_loss:
-                        st.session_state.stop_loss = new_sl
-
-            sl = st.session_state.stop_loss
-            tp = st.session_state.take_profit
-
-            if t_type == "بيع":
-                pnl_dollar = (entry - current_price) * coins
-                pnl_percent = ((entry - current_price) / entry) * 100
-                hit_stop_loss = current_price >= sl
-                hit_take_profit = current_price <= tp
-            else:
-                pnl_dollar = (current_price - entry) * coins
-                pnl_percent = ((current_price - entry) / entry) * 100
-                hit_stop_loss = current_price <= sl
-                hit_take_profit = current_price >= tp
-
-            st.subheader(f"📡 مراقبة الصفقة الحية: {st.session_state.trade_symbol} ({t_type}) | حجمها ${pos_usd:,.2f}")
-
-            if hit_stop_loss:
-                st.error("🚨 **تنبيه وقف الخسارة!** السعر وصل لحد الوقف المحدد. اضغط على **خروج الآن**.")
-            elif hit_take_profit:
-                st.success("🎉 **تنبيه جني الأرباح!** الصفقة حققت الهدف المطلوب. اضغط على **خروج الآن**.")
-            elif (t_type == "شراء" and decision == "SELL") or (t_type == "بيع" and decision == "BUY"):
-                st.warning("⚠️ **تنبيه انعكاس الاتجاه!** المؤشرات انعكست ضد صفقتك، يُنصح بالخروج.")
-            else:
-                st.info("🟢 **الصفقة مستمرة بأمان...** جاري متابعة السعر والوقف المتحرك لحظياً.")
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("سعر الدخول", format_price(entry))
-            m2.metric("الربح / الخسارة", f"${pnl_dollar:,.2f}", f"{pnl_percent:.2f}%")
-            m3.metric("وقف الخسارة الحالي", format_price(sl))
-            m4.metric("هدف الربح", format_price(tp))
-
-            if st.button("🚨 خروج الآن (إغلاق الصفقة وتسجيلها)", type="primary", use_container_width=True):
-                st.session_state.trade_history.append({
-                    "الوقت": datetime.now().strftime("%H:%M:%S"),
-                    "العملة": st.session_state.trade_symbol,
-                    "النوع": t_type,
-                    "الدخول": round(entry, 4 if entry < 10 else 2),
-                    "الخروج": round(current_price, 4 if current_price < 10 else 2),
-                    "الربح/الخسارة ($)": round(pnl_dollar, 2),
-                    "النسبة (%)": round(pnl_percent, 2)
-                })
-                st.session_state.trade_active = False
-                st.rerun()
-
-        st.markdown("---")
-        plot_df = df.tail(60).copy()
-        plot_df['EMA 9'] = ind_df['ema9'].tail(60)
-        plot_df['EMA 21'] = ind_df['ema21'].tail(60)
-        plot_df['VWAP (السيولة)'] = ind_df['vwap'].tail(60)
-
-        fig = px.line(plot_df, x='timestamp', y=['close', 'EMA 9', 'EMA 21', 'VWAP (السيولة)'], title=f"الشارت اللحظي + خط سيولة VWAP - {symbol}")
-        if st.session_state.trade_active:
-            fig.add_hline(y=st.session_state.entry_price, line_dash="dash", line_color="blue", annotation_text="دخول")
-            fig.add_hline(y=st.session_state.stop_loss, line_dash="dot", line_color="red", annotation_text="وقف الخسارة")
-            fig.add_hline(y=st.session_state.take_profit, line_dash="dot", line_color="green", annotation_text="هدف الربح")
-        st.plotly_chart(fig, use_container_width=True)
-
-        if st.session_state.trade_history:
-            st.markdown("---")
-            st.subheader("📒 سجل صفقات الجلسة وأداء الخبير")
-            hist_df = pd.DataFrame(st.session_state.trade_history)
-            total_pnl = hist_df["الربح/الخسارة ($)"].sum()
-            win_trades = int((hist_df["الربح/الخسارة ($)"] > 0).sum())
-            win_rate = (win_trades / len(hist_df)) * 100
-
-            s1, s2, s3 = st.columns(3)
-            s1.metric("إجمالي الصفقات المغلقة", len(hist_df))
-            s2.metric("نسبة النجاح (Win Rate)", f"{win_rate:.1f}%")
-            s3.metric("صافي ربح/خسارة الجلسة", f"${total_pnl:,.2f}")
-            st.dataframe(hist_df, use_container_width=True, hide_index=True)
-
-    live_trading_dashboard()
-
-with tab_backtest:
-    st.subheader(f"🧪 اختبار أداء الاستراتيجية تاريخياً على {symbol}")
-    st.caption("يختبر البوت قواعده الحالية على البيانات التاريخية المتاحة لحساب نسبة النجاح وأقصى تراجع قبل التداول.")
-
-    bt_col1, bt_col2, bt_col3 = st.columns(3)
-    bt_sl = bt_col1.number_input("وقف الخسارة للاختبار (%)", min_value=0.5, max_value=15.0, value=float(stop_distance_pct), step=0.5)
-    bt_tp = bt_col2.number_input("هدف الربح للاختبار (%)", min_value=0.5, max_value=30.0, value=float(stop_distance_pct * 2), step=0.5)
-    bt_pos = bt_col3.number_input("مبلغ الصفقة للاختبار ($)", min_value=10.0, max_value=100000.0, value=float(capital), step=50.0)
-
-    if st.button("▶️ تشغيل الاختبار التاريخي الآن", type="primary"):
-        with st.spinner("جاري محاكاة الصفقات التاريخية..."):
-            hist_raw = fetch_live_data(symbol, period="5d", interval=timeframe)
-            bt_res = run_backtest(hist_raw, bt_pos, bt_sl, bt_tp)
-
-        if not bt_res or bt_res["count"] == 0:
-            st.warning("لم يتم العثور على صفقات مكتملة خلال الفترة التاريخية المختارة بهذه الإعدادات.")
-        else:
-            b1, b2, b3, b4 = st.columns(4)
-            b1.metric("عدد الصفقات المختبرة", bt_res["count"])
-            b2.metric("نسبة النجاح التاريخية", f"{bt_res['win_rate']:.1f}%")
-            b3.metric("صافي الربح/الخسارة التقديري", f"${bt_res['net_pnl']:,.2f}")
-            b4.metric("أقصى تراجع (Max Drawdown)", f"${bt_res['max_dd']:,.2f}")
-            st.dataframe(bt_res["log"], use_container_width=True, hide_index=True)
+live_trading_dashboard()
