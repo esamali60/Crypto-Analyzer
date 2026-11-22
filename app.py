@@ -21,6 +21,8 @@ defaults = {
     "trade_symbol": "",
     "trade_type": "شراء",
     "selected_symbol": "BTCUSDT",
+    "radar_symbol": "",
+    "radar_decision": "",
     "trade_history": [],
     "breakeven_triggered": False
 }
@@ -378,12 +380,15 @@ def get_htf_bias_usdt(symbol_usdt):
         return "هابط 🔴", -1
     return "عرضي 🟡", 0
 
+# إعدادات الشريط الجانبي
 st.sidebar.header("📡 رادار الفرص (USDT)")
+timeframe = st.sidebar.selectbox("الإطار الزمني", options=["1m", "5m", "15m"], index=1)
+
 if st.sidebar.button("🔍 ابحث عن أفضل عملة الآن", type="primary", use_container_width=True):
     with st.sidebar.status("جاري فحص العملات..."):
         ranked = []
         for coin in WATCHLIST_USDT:
-            d, _ = fetch_usdt_ohlcv(coin, interval="5m", limit=100)
+            d, _ = fetch_usdt_ohlcv(coin, interval=timeframe, limit=150)
             if d is not None and len(d) >= 40:
                 ind_d = compute_expert_indicators(d)
                 _, bias = get_htf_bias_usdt(coin)
@@ -393,7 +398,8 @@ if st.sidebar.button("🔍 ابحث عن أفضل عملة الآن", type="prim
                     "العملة": coin,
                     "القوة": res['score'],
                     "الأخبار": n_info['score'],
-                    "ADX": round(res['adx'], 1)
+                    "ADX": round(res['adx'], 1),
+                    "القرار": res['decision']
                 })
 
         if ranked:
@@ -402,6 +408,8 @@ if st.sidebar.button("🔍 ابحث عن أفضل عملة الآن", type="prim
             rdf = rdf.sort_values(by='abs_s', ascending=False).reset_index(drop=True)
             top = rdf.iloc[0]
             st.session_state.selected_symbol = top['العملة']
+            st.session_state.radar_symbol = top['العملة']
+            st.session_state.radar_decision = "SELL" if top['القوة'] < 0 else "BUY"
             d_txt = "شراء 🟢" if top['القوة'] > 0 else "بيع 🔴"
             st.sidebar.success(f"🎯 **{top['العملة']}** — {d_txt} ({int(top['abs_s'])}/100)")
             st.sidebar.dataframe(rdf[['العملة', 'القوة', 'الأخبار']], use_container_width=True, hide_index=True)
@@ -410,6 +418,8 @@ st.sidebar.markdown("---")
 st.sidebar.header("⚙️ إعدادات الصفقة")
 raw_input = st.sidebar.text_input("رمز العملة (USDT)", value=st.session_state.selected_symbol)
 symbol = normalize_symbol_to_usdt(raw_input)
+if symbol != st.session_state.radar_symbol:
+    st.session_state.radar_decision = ""
 st.session_state.selected_symbol = symbol
 
 capital_usdt = st.sidebar.number_input("رأس المال (USDT)", min_value=10.0, value=500.0, step=50.0)
@@ -417,7 +427,6 @@ max_risk_pct = st.sidebar.slider("المخاطرة القصوى (%)", min_value=
 sl_mode = st.sidebar.radio("حساب وقف الخسارة", options=["ذكي حسب التقلب (ATR)", "نسبة ثابتة (%)"], index=0)
 fixed_sl_pct = st.sidebar.slider("نسبة الوقف الثابتة (%)", min_value=0.5, max_value=10.0, value=1.5, step=0.5)
 auto_advance = st.sidebar.checkbox("تقدّم وتأمين الصفقة تلقائياً", value=True)
-timeframe = st.sidebar.selectbox("الإطار الزمني", options=["1m", "5m", "15m"], index=1)
 refresh_rate = st.sidebar.selectbox("التحديث (ثانية)", options=[10, 15, 30, 60], index=1)
 
 @st.fragment(run_every=refresh_rate)
@@ -438,7 +447,13 @@ def live_trading_dashboard():
     adx = analysis['adx']
     atr = analysis['atr']
     score = analysis['score']
-    decision = analysis['decision']
+
+    # توحيد القرار بين الرادار واللوحة الرئيسية
+    if st.session_state.radar_symbol == symbol and st.session_state.radar_decision in ["BUY", "SELL"]:
+        decision = st.session_state.radar_decision
+    else:
+        decision = analysis['decision']
+
     last_update = datetime.now().strftime("%H:%M:%S")
 
     if sl_mode == "ذكي حسب التقلب (ATR)" and atr > 0:
@@ -452,7 +467,7 @@ def live_trading_dashboard():
     pos_usdt = min(capital_usdt, risk_usdt / (sl_pct / 100.0))
 
     if decision == "BUY":
-        sig_label = f"شراء (BUY) 🟢 | {score}/100"
+        sig_label = f"شراء (BUY) 🟢 | {abs(score)}/100"
         sig_color = "#198754"
         btn_tag = "🟢 شراء"
     elif decision == "SELL":
@@ -512,7 +527,7 @@ def live_trading_dashboard():
             tp1_txt = f"+{sl_pct * 1.5:.2f}%"
             tp2_txt = f"+{sl_pct * 2.5:.2f}%"
         else:
-            st.warning("⏳ الإشارة الحالية **ترقب** (لم تصل إلى عتبة شراء ±35 أو بيع -35). الأرقام أدناه افتراضية في وضع الترقب.")
+            st.warning("⏳ الإشارة الحالية **ترقب** (لم تصل إلى عتبة ±35). الأرقام أدناه افتراضية في وضع الترقب.")
             is_sell = score < 0
             if is_sell:
                 sl_price = price + sl_dist
