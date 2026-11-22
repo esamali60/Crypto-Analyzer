@@ -301,4 +301,112 @@ def veteran_expert_decision(ind_df, idx, htf_bias=0, news_info=None):
     elif macd < sig and hist < prev_hist:
         score -= 14
         bear_conf += 1
-        reasons.append("تس
+        reasons.append("تسارع سلبي للماكد")
+
+    if price > vwap:
+        score += 12
+        bull_conf += 1
+        reasons.append("فوق سيولة المؤسسات VWAP")
+    else:
+        score -= 12
+        bear_conf += 1
+        reasons.append("تحت ضغط سيولة VWAP")
+
+    if vol_ratio >= 1.6:
+        reasons.append(f"قفزة سيولة ({vol_ratio:.1f}x)")
+        score += 8 if score > 0 else -8
+
+    if not pd.isna(lower_b) and price <= float(lower_b) * 1.003:
+        score += 10
+        reasons.append("قاع بولينجر")
+    elif not pd.isna(upper_b) and price >= float(upper_b) * 0.997:
+        score -= 10
+        reasons.append("قمة بولينجر")
+
+    if htf_bias > 0:
+        score += 12
+        bull_conf += 1
+        reasons.append("دعم فريم الساعة الصاعد")
+    elif htf_bias < 0:
+        score -= 12
+        bear_conf += 1
+        reasons.append("دعم فريم الساعة الهابط")
+
+    n_score = news_info.get("score", 0)
+    if n_score > 0:
+        score += n_score
+        bull_conf += 1
+        reasons.append(f"أخبار موجبة للشراء ({n_score:+d})")
+    elif n_score < 0:
+        score += n_score
+        bear_conf += 1
+        reasons.append(f"أخبار سالبة للبيع ({n_score:+d})")
+
+    if adx < 18:
+        score = int(score * 0.65)
+        reasons.append(f"ترند عرضي (ADX={adx:.1f})")
+    elif adx >= 25:
+        reasons.append(f"ترند قوي (ADX={adx:.1f})")
+
+    score = max(-100, min(100, score))
+
+    if score >= 35:
+        decision = "BUY"
+    elif score <= -35:
+        decision = "SELL"
+    else:
+        decision = "NEUTRAL"
+
+    return {
+        "price": price, "rsi": rsi, "mfi": mfi, "adx": adx, "atr": atr, "vwap": vwap,
+        "score": score, "decision": decision,
+        "bull_conf": bull_conf, "bear_conf": bear_conf, "reasons": reasons
+    }
+
+def get_htf_bias_usdt(symbol_usdt):
+    df_1h, _ = fetch_usdt_ohlcv(symbol_usdt, interval="1h", limit=60)
+    if df_1h is None or len(df_1h) < 30:
+        return "غير محدد", 0
+    ema20 = df_1h['close'].ewm(span=20, adjust=False).mean()
+    ema50 = df_1h['close'].ewm(span=50, adjust=False).mean()
+    c = float(df_1h['close'].iloc[-1])
+    e20 = float(ema20.iloc[-1])
+    e50 = float(ema50.iloc[-1])
+    if c > e20 > e50:
+        return "صاعد 🟢", 1
+    elif c < e20 < e50:
+        return "هابط 🔴", -1
+    return "عرضي 🟡", 0
+
+st.sidebar.header("📡 رادار الفرص (USDT)")
+if st.sidebar.button("🔍 ابحث عن أفضل عملة الآن", type="primary", use_container_width=True):
+    with st.sidebar.status("جاري فحص العملات..."):
+        ranked = []
+        for coin in WATCHLIST_USDT:
+            d, _ = fetch_usdt_ohlcv(coin, interval="5m", limit=100)
+            if d is not None and len(d) >= 40:
+                ind_d = compute_expert_indicators(d)
+                _, bias = get_htf_bias_usdt(coin)
+                n_info = fetch_brief_news_signal(coin)
+                res = veteran_expert_decision(ind_d, len(ind_d) - 1, htf_bias=bias, news_info=n_info)
+                ranked.append({
+                    "العملة": coin,
+                    "القوة": res['score'],
+                    "الأخبار": n_info['score'],
+                    "ADX": round(res['adx'], 1)
+                })
+
+        if ranked:
+            rdf = pd.DataFrame(ranked)
+            rdf['abs_s'] = rdf['القوة'].abs()
+            rdf = rdf.sort_values(by='abs_s', ascending=False).reset_index(drop=True)
+            top = rdf.iloc[0]
+            st.session_state.selected_symbol = top['العملة']
+            d_txt = "شراء 🟢" if top['القوة'] > 0 else "بيع 🔴"
+            st.sidebar.success(f"🎯 **{top['العملة']}** — {d_txt} ({int(top['abs_s'])}/100)")
+            st.sidebar.dataframe(rdf[['العملة', 'القوة', 'الأخبار']], use_container_width=True, hide_index=True)
+
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ إعدادات الصفقة")
+raw_input = st.sidebar.text_input("رمز العملة (USDT)", value=st.session_state.selected_symbol)
+symbol = normalize_symbol_
