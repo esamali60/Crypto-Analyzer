@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 import re
 
-st.set_page_config(page_title="بوت التداول الذاتي — أخبار موجزة", layout="wide")
+st.set_page_config(page_title="مكتب التداول الذكي — دعم القرار والواجهة", layout="wide")
 
 defaults = {
     "trade_active": False,
@@ -30,7 +30,7 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-st.title("🤖 بوت التداول الذاتي (مدارس فنية + أخبار موجزة)")
+st.title("🧭 مكتب التداول الذكي — دعم القرار والواجهة (USDT)")
 
 WATCHLIST_USDT = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "ADAUSDT",
@@ -380,7 +380,7 @@ def get_htf_bias_usdt(symbol_usdt):
         return "هابط 🔴", -1
     return "عرضي 🟡", 0
 
-# إعدادات الشريط الجانبي
+# الشريط الجانبي
 st.sidebar.header("📡 رادار الفرص (USDT)")
 timeframe = st.sidebar.selectbox("الإطار الزمني", options=["1m", "5m", "15m"], index=1)
 
@@ -398,8 +398,7 @@ if st.sidebar.button("🔍 ابحث عن أفضل عملة الآن", type="prim
                     "العملة": coin,
                     "القوة": res['score'],
                     "الأخبار": n_info['score'],
-                    "ADX": round(res['adx'], 1),
-                    "القرار": res['decision']
+                    "ADX": round(res['adx'], 1)
                 })
 
         if ranked:
@@ -448,7 +447,6 @@ def live_trading_dashboard():
     atr = analysis['atr']
     score = analysis['score']
 
-    # توحيد القرار بين الرادار واللوحة الرئيسية
     if st.session_state.radar_symbol == symbol and st.session_state.radar_decision in ["BUY", "SELL"]:
         decision = st.session_state.radar_decision
     else:
@@ -466,29 +464,37 @@ def live_trading_dashboard():
     risk_usdt = capital_usdt * (max_risk_pct / 100.0)
     pos_usdt = min(capital_usdt, risk_usdt / (sl_pct / 100.0))
 
+    # بناء ملخص القرار العملي
     if decision == "BUY":
         sig_label = f"شراء (BUY) 🟢 | {abs(score)}/100"
         sig_color = "#198754"
         btn_tag = "🟢 شراء"
+        guidance = f"أفضلية شراء ({analysis['bull_conf']} أدلة داعمة) — راقب الوقف والهدفين."
     elif decision == "SELL":
         sig_label = f"بيع (SELL) 🔴 | {abs(score)}/100"
         sig_color = "#dc3545"
         btn_tag = "🔴 بيع"
+        guidance = f"أفضلية بيع ({analysis['bear_conf']} أدلة داعمة) — التزم بالوقف أعلى الدخول."
     else:
         sig_label = f"ترقب ⏳ | {score}"
         sig_color = "#6c757d"
         btn_tag = "🟡 ترقب (دخول يدوي)"
+        guidance = "الإشارة متوسطة أو متذبذبة — الانتظار أفضل من التسرع."
 
     st.caption(
         f"📡 **{data_source}** | تحديث: **{last_update}** | الفريم: **{timeframe}** | "
         f"الساعة: **{htf_text}** | ADX: **{adx:.1f}**"
     )
 
+    # شريط الأخبار الموجز الملون
     st.markdown(f"""
     <div style="background-color: {news_info['color']}; padding: 8px 14px; border-radius: 8px; color: white; font-weight: bold; margin-bottom: 10px;">
         📰 الأخبار: {news_info['status']} ({news_info['score']:+d})
     </div>
     """, unsafe_allow_html=True)
+
+    # بطاقة دعم القرار المباشرة
+    st.info(f"🧭 **توجيه القرار الآن:** {guidance}")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(f"سعر {symbol}", format_price(price), f"VWAP: {format_price(analysis['vwap'])}")
@@ -502,7 +508,7 @@ def live_trading_dashboard():
         </div>
         """, unsafe_allow_html=True)
 
-    with st.expander("📋 ملخص المؤشرات والأخبار", expanded=False):
+    with st.expander("📋 تفاصيل المؤشرات والأخبار", expanded=False):
         st.write(" • ".join(analysis['reasons']))
 
     st.markdown("---")
@@ -527,7 +533,7 @@ def live_trading_dashboard():
             tp1_txt = f"+{sl_pct * 1.5:.2f}%"
             tp2_txt = f"+{sl_pct * 2.5:.2f}%"
         else:
-            st.warning("⏳ الإشارة الحالية **ترقب** (لم تصل إلى عتبة ±35). الأرقام أدناه افتراضية في وضع الترقب.")
+            st.warning("⏳ الإشارة الحالية **ترقب** — الأرقام أدناه توضيحية حتى تتضح إشارة شراء أو بيع.")
             is_sell = score < 0
             if is_sell:
                 sl_price = price + sl_dist
@@ -544,11 +550,17 @@ def live_trading_dashboard():
                 tp1_txt = f"+{sl_pct * 1.5:.2f}%"
                 tp2_txt = f"+{sl_pct * 2.5:.2f}%"
 
+        # حساب العائد والمخاطرة المتوقعة بالدولار الرقمي
+        coins_est = pos_usdt / price if price > 0 else 0.0
+        est_loss = abs(price - sl_price) * coins_est
+        est_tp1 = abs(tp1_price - price) * coins_est
+        est_tp2 = abs(tp2_price - price) * coins_est
+
         p1, p2, p3, p4 = st.columns(4)
         p1.info(f"**الدخول:**\n\n{format_price(price)}")
-        p2.warning(f"**الوقف ({sl_txt}):**\n\n{format_price(sl_price)}")
-        p3.success(f"**الهدف 1 ({tp1_txt}):**\n\n{format_price(tp1_price)}")
-        p4.success(f"**الهدف 2 ({tp2_txt}):**\n\n{format_price(tp2_price)}")
+        p2.warning(f"**الوقف ({sl_txt}):**\n\n{format_price(sl_price)}\n\nخسارة محتملة: -{est_loss:,.2f} USDT")
+        p3.success(f"**الهدف 1 ({tp1_txt}):**\n\n{format_price(tp1_price)}\n\nربح محتمل: +{est_tp1:,.2f} USDT")
+        p4.success(f"**الهدف 2 ({tp2_txt}):**\n\n{format_price(tp2_price)}\n\nربح محتمل: +{est_tp2:,.2f} USDT")
 
         if st.button(f"✅ بدء الصفقة ({btn_tag}) — {pos_usdt:,.2f} USDT", type="primary", use_container_width=True):
             st.session_state.trade_active = True
