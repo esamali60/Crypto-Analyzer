@@ -49,8 +49,10 @@ BEARISH_KEYWORDS = [
     "bear", "bearish", "rate hike", "hike rates", "inflation", "outflow", "liquidation", "fraud", "delist"
 ]
 
+
 def format_price(val):
     return f"{val:,.4f} USDT" if abs(val) < 10 else f"{val:,.2f} USDT"
+
 
 def normalize_symbol_to_usdt(raw_sym):
     s = str(raw_sym).strip().upper().replace("-USD", "").replace("/USDT", "").replace("-", "")
@@ -59,6 +61,7 @@ def normalize_symbol_to_usdt(raw_sym):
     if not s.endswith("USDT"):
         s = f"{s}USDT"
     return s
+
 
 @st.cache_data(ttl=180)
 def fetch_brief_news_signal(symbol_usdt):
@@ -93,6 +96,7 @@ def fetch_brief_news_signal(symbol_usdt):
     else:
         return {"score": 0, "status": "متعادلة ⚪", "color": "#6c757d"}
 
+
 @st.cache_data(ttl=15)
 def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=120):
     sym = normalize_symbol_to_usdt(symbol_usdt)
@@ -104,13 +108,13 @@ def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=120):
             data = r.json()
             if isinstance(data, list) and len(data) > 20:
                 df = pd.DataFrame(data, columns=[
-                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                    'close_time', 'qav', 'trades', 'tbbav', 'tbqav', 'ignore'
+                    "timestamp", "open", "high", "low", "close", "volume",
+                    "close_time", "qav", "trades", "tbbav", "tbqav", "ignore"
                 ])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                for col in ['open', 'high', 'low', 'close', 'volume']:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].dropna().reset_index(drop=True)
+                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+                for col in ["open", "high", "low", "close", "volume"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                df = df[["timestamp", "open", "high", "low", "close", "volume"]].dropna().reset_index(drop=True)
                 if len(df) >= 35:
                     return df, "Binance"
     except Exception:
@@ -127,11 +131,11 @@ def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=120):
             res_json = r_kc.json()
             if res_json.get("code") == "200000" and res_json.get("data"):
                 raw = res_json["data"][:limit][::-1]
-                df = pd.DataFrame(raw, columns=['timestamp', 'open', 'close', 'high', 'low', 'volume', 'turnover'])
-                df['timestamp'] = pd.to_datetime(pd.to_numeric(df['timestamp']), unit='s')
-                for col in ['open', 'high', 'low', 'close', 'volume']:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].dropna().reset_index(drop=True)
+                df = pd.DataFrame(raw, columns=["timestamp", "open", "close", "high", "low", "volume", "turnover"])
+                df["timestamp"] = pd.to_datetime(pd.to_numeric(df["timestamp"]), unit="s")
+                for col in ["open", "high", "low", "close", "volume"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                df = df[["timestamp", "open", "high", "low", "close", "volume"]].dropna().reset_index(drop=True)
                 if len(df) >= 35:
                     return df, "KuCoin"
     except Exception:
@@ -146,14 +150,14 @@ def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=120):
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df = df.reset_index()
-            time_col = 'Datetime' if 'Datetime' in df.columns else ('Date' if 'Date' in df.columns else df.columns[0])
+            time_col = "Datetime" if "Datetime" in df.columns else ("Date" if "Date" in df.columns else df.columns[0])
             df = df.rename(columns={
-                time_col: 'timestamp', 'Open': 'open', 'High': 'high',
-                'Low': 'low', 'Close': 'close', 'Volume': 'volume'
+                time_col: "timestamp", "Open": "open", "High": "high",
+                "Low": "low", "Close": "close", "Volume": "volume"
             })
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].dropna().tail(limit).reset_index(drop=True)
+            for col in ["open", "high", "low", "close", "volume"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            df = df[["timestamp", "open", "high", "low", "close", "volume"]].dropna().tail(limit).reset_index(drop=True)
             if len(df) >= 35:
                 return df, "Yahoo Finance"
     except Exception:
@@ -161,11 +165,12 @@ def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=120):
 
     return None, None
 
+
 def compute_expert_indicators(df):
-    close = df['close']
-    high = df['high']
-    low = df['low']
-    volume = df['volume'].fillna(0)
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+    volume = df["volume"].fillna(0)
 
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -234,29 +239,30 @@ def compute_expert_indicators(df):
         "atr": atr, "adx": adx, "vol_ratio": vol_ratio
     })
 
+
 def veteran_expert_decision(ind_df, idx, htf_bias=0, news_info=None):
     if news_info is None:
         news_info = {"score": 0}
 
-    price = float(ind_df['close'].iloc[idx])
-    rsi = float(ind_df['rsi'].iloc[idx]) if not pd.isna(ind_df['rsi'].iloc[idx]) else 50.0
-    s_rsi = float(ind_df['stoch_rsi'].iloc[idx]) if not pd.isna(ind_df['stoch_rsi'].iloc[idx]) else 50.0
-    mfi = float(ind_df['mfi'].iloc[idx]) if not pd.isna(ind_df['mfi'].iloc[idx]) else 50.0
-    ema9 = float(ind_df['ema9'].iloc[idx])
-    ema21 = float(ind_df['ema21'].iloc[idx])
-    ema50 = float(ind_df['ema50'].iloc[idx])
-    macd = float(ind_df['macd'].iloc[idx])
-    sig = float(ind_df['signal_line'].iloc[idx])
-    hist = float(ind_df['macd_hist'].iloc[idx])
-    prev_hist = float(ind_df['macd_hist'].iloc[idx - 1]) if idx > 0 else hist
-    vwap = float(ind_df['vwap'].iloc[idx])
-    tenkan = float(ind_df['tenkan'].iloc[idx]) if not pd.isna(ind_df['tenkan'].iloc[idx]) else price
-    kijun = float(ind_df['kijun'].iloc[idx]) if not pd.isna(ind_df['kijun'].iloc[idx]) else price
-    adx = float(ind_df['adx'].iloc[idx])
-    atr = float(ind_df['atr'].iloc[idx])
-    vol_ratio = float(ind_df['vol_ratio'].iloc[idx])
-    upper_b = ind_df['upper_band'].iloc[idx]
-    lower_b = ind_df['lower_band'].iloc[idx]
+    price = float(ind_df["close"].iloc[idx])
+    rsi = float(ind_df["rsi"].iloc[idx]) if not pd.isna(ind_df["rsi"].iloc[idx]) else 50.0
+    s_rsi = float(ind_df["stoch_rsi"].iloc[idx]) if not pd.isna(ind_df["stoch_rsi"].iloc[idx]) else 50.0
+    mfi = float(ind_df["mfi"].iloc[idx]) if not pd.isna(ind_df["mfi"].iloc[idx]) else 50.0
+    ema9 = float(ind_df["ema9"].iloc[idx])
+    ema21 = float(ind_df["ema21"].iloc[idx])
+    ema50 = float(ind_df["ema50"].iloc[idx])
+    macd = float(ind_df["macd"].iloc[idx])
+    sig = float(ind_df["signal_line"].iloc[idx])
+    hist = float(ind_df["macd_hist"].iloc[idx])
+    prev_hist = float(ind_df["macd_hist"].iloc[idx - 1]) if idx > 0 else hist
+    vwap = float(ind_df["vwap"].iloc[idx])
+    tenkan = float(ind_df["tenkan"].iloc[idx]) if not pd.isna(ind_df["tenkan"].iloc[idx]) else price
+    kijun = float(ind_df["kijun"].iloc[idx]) if not pd.isna(ind_df["kijun"].iloc[idx]) else price
+    adx = float(ind_df["adx"].iloc[idx])
+    atr = float(ind_df["atr"].iloc[idx])
+    vol_ratio = float(ind_df["vol_ratio"].iloc[idx])
+    upper_b = ind_df["upper_band"].iloc[idx]
+    lower_b = ind_df["lower_band"].iloc[idx]
 
     score = 0
     bull_conf = 0
@@ -280,95 +286,3 @@ def veteran_expert_decision(ind_df, idx, htf_bias=0, news_info=None):
 
     if price > tenkan > kijun:
         score += 14
-        bull_conf += 1
-        reasons.append("توازن إيشيموكو إيجابي")
-    elif price < tenkan < kijun:
-        score -= 14
-        bear_conf += 1
-        reasons.append("توازن إيشيموكو سلبي")
-
-    if mfi < 28 or rsi < 32:
-        score += 16
-        bull_conf += 1
-        reasons.append(f"تجميع سيولة ذكية (MFI={mfi:.0f}, RSI={rsi:.0f})")
-    elif mfi > 72 or rsi > 68:
-        score -= 16
-        bear_conf += 1
-        reasons.append(f"تصريف سيولة وتشبع (MFI={mfi:.0f}, RSI={rsi:.0f})")
-
-    if s_rsi < 20 and hist > prev_hist:
-        score += 10
-        bull_conf += 1
-        reasons.append("انعكاس صاعد مبكر (StochRSI)")
-    elif s_rsi > 80 and hist < prev_hist:
-        score -= 10
-        bear_conf += 1
-        reasons.append("انعكاس هابط مبكر (StochRSI)")
-
-    if macd > sig and hist > prev_hist:
-        score += 14
-        bull_conf += 1
-        reasons.append("تسارع إيجابي للماكد")
-    elif macd < sig and hist < prev_hist:
-        score -= 14
-        bear_conf += 1
-        reasons.append("تسارع سلبي للماكد")
-
-    if price > vwap:
-        score += 12
-        bull_conf += 1
-        reasons.append("فوق سيولة المؤسسات VWAP")
-    else:
-        score -= 12
-        bear_conf += 1
-        reasons.append("تحت ضغط سيولة VWAP")
-
-    if vol_ratio >= 1.6:
-        reasons.append(f"قفزة سيولة ({vol_ratio:.1f}x)")
-        score += 8 if score > 0 else -8
-
-    if not pd.isna(lower_b) and price <= float(lower_b) * 1.003:
-        score += 10
-        reasons.append("قاع بولينجر")
-    elif not pd.isna(upper_b) and price >= float(upper_b) * 0.997:
-        score -= 10
-        reasons.append("قمة بولينجر")
-
-    if htf_bias > 0:
-        score += 12
-        bull_conf += 1
-        reasons.append("دعم فريم الساعة الصاعد")
-    elif htf_bias < 0:
-        score -= 12
-        bear_conf += 1
-        reasons.append("دعم فريم الساعة الهابط")
-
-    n_score = news_info.get("score", 0)
-    if n_score > 0:
-        score += n_score
-        bull_conf += 1
-        reasons.append(f"أخبار موجبة للشراء ({n_score:+d})")
-    elif n_score < 0:
-        score += n_score
-        bear_conf += 1
-        reasons.append(f"أخبار سالبة للبيع ({n_score:+d})")
-
-    if adx < 18:
-        score = int(score * 0.65)
-        reasons.append(f"ترند عرضي (ADX={adx:.1f})")
-    elif adx >= 25:
-        reasons.append(f"ترند قوي (ADX={adx:.1f})")
-
-    score = max(-100, min(100, score))
-
-    if score >= 35:
-        decision = "BUY"
-    elif score <= -35:
-        decision = "SELL"
-    else:
-        decision = "NEUTRAL"
-
-    return {
-        "price": price, "rsi": rsi, "mfi": mfi, "adx": adx, "atr": atr, "vwap": vwap,
-        "score": score, "decision": decision,
-        "bull_conf": bull_conf, "bear_conf": bear_conf
