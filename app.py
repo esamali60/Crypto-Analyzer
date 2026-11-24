@@ -6,10 +6,9 @@ import yfinance as yf
 import plotly.express as px
 import xml.etree.ElementTree as ET
 from datetime import datetime
-import time
 import re
 
-st.set_page_config(page_title="مكتب التداول الذكي — تنبيهات مضيئة", layout="wide")
+st.set_page_config(page_title="مكتب التداول الذكي — USDT", layout="wide")
 
 defaults = {
     "trade_active": False,
@@ -54,7 +53,9 @@ def format_price(val):
     return f"{val:,.4f} USDT" if abs(val) < 10 else f"{val:,.2f} USDT"
 
 def normalize_symbol_to_usdt(raw_sym):
-    s = raw_sym.strip().upper().replace("-USD", "").replace("/USDT", "").replace("-", "")
+    s = str(raw_sym).strip().upper().replace("-USD", "").replace("/USDT", "").replace("-", "")
+    if not s:
+        return "BTCUSDT"
     if not s.endswith("USDT"):
         s = f"{s}USDT"
     return s
@@ -70,7 +71,7 @@ def fetch_brief_news_signal(symbol_usdt):
 
     for feed_url in feeds:
         try:
-            resp = requests.get(feed_url, timeout=4, headers={"User-Agent": "Mozilla/5.0"})
+            resp = requests.get(feed_url, timeout=3, headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200 and resp.text:
                 root = ET.fromstring(resp.text)
                 for item in root.findall(".//item")[:10]:
@@ -92,13 +93,13 @@ def fetch_brief_news_signal(symbol_usdt):
     else:
         return {"score": 0, "status": "متعادلة ⚪", "color": "#6c757d"}
 
-@st.cache_data(ttl=8)
-def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=150):
+@st.cache_data(ttl=15)
+def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=120):
     sym = normalize_symbol_to_usdt(symbol_usdt)
 
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}"
-        r = requests.get(url, timeout=5)
+        r = requests.get(url, timeout=3)
         if r.status_code == 200:
             data = r.json()
             if isinstance(data, list) and len(data) > 20:
@@ -109,7 +110,9 @@ def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=150):
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 for col in ['open', 'high', 'low', 'close', 'volume']:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
-                return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].dropna().reset_index(drop=True), "Binance"
+                df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].dropna().reset_index(drop=True)
+                if len(df) >= 35:
+                    return df, "Binance"
     except Exception:
         pass
 
@@ -119,7 +122,7 @@ def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=150):
         kc_map = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "1hour"}
         kc_tf = kc_map.get(interval, "5min")
         url_kc = f"https://api.kucoin.com/api/v1/market/candles?type={kc_tf}&symbol={kc_pair}"
-        r_kc = requests.get(url_kc, timeout=5)
+        r_kc = requests.get(url_kc, timeout=3)
         if r_kc.status_code == 200:
             res_json = r_kc.json()
             if res_json.get("code") == "200000" and res_json.get("data"):
@@ -128,7 +131,9 @@ def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=150):
                 df['timestamp'] = pd.to_datetime(pd.to_numeric(df['timestamp']), unit='s')
                 for col in ['open', 'high', 'low', 'close', 'volume']:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
-                return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].dropna().reset_index(drop=True), "KuCoin"
+                df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].dropna().reset_index(drop=True)
+                if len(df) >= 35:
+                    return df, "KuCoin"
     except Exception:
         pass
 
@@ -136,7 +141,7 @@ def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=150):
         base = sym.replace("USDT", "")
         yf_pair = f"{base}-USD"
         period = "5d" if interval in ["5m", "15m", "1h"] else "1d"
-        df = yf.download(yf_pair, period=period, interval=interval, progress=False)
+        df = yf.download(yf_pair, period=period, interval=interval, progress=False, timeout=4)
         if df is not None and not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
@@ -149,7 +154,7 @@ def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=150):
             for col in ['open', 'high', 'low', 'close', 'volume']:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].dropna().tail(limit).reset_index(drop=True)
-            if len(df) > 20:
+            if len(df) >= 35:
                 return df, "Yahoo Finance"
     except Exception:
         pass
@@ -366,108 +371,4 @@ def veteran_expert_decision(ind_df, idx, htf_bias=0, news_info=None):
     return {
         "price": price, "rsi": rsi, "mfi": mfi, "adx": adx, "atr": atr, "vwap": vwap,
         "score": score, "decision": decision,
-        "bull_conf": bull_conf, "bear_conf": bear_conf, "reasons": reasons
-    }
-
-def get_htf_bias_usdt(symbol_usdt):
-    df_1h, _ = fetch_usdt_ohlcv(symbol_usdt, interval="1h", limit=60)
-    if df_1h is None or len(df_1h) < 30:
-        return "غير محدد", 0
-    ema20 = df_1h['close'].ewm(span=20, adjust=False).mean()
-    ema50 = df_1h['close'].ewm(span=50, adjust=False).mean()
-    c = float(df_1h['close'].iloc[-1])
-    e20 = float(ema20.iloc[-1])
-    e50 = float(ema50.iloc[-1])
-    if c > e20 > e50:
-        return "صاعد 🟢", 1
-    elif c < e20 < e50:
-        return "هابط 🔴", -1
-    return "عرضي 🟡", 0
-
-def render_glowing_alert(message, bg_color="#dc3545", glow_color="rgba(220, 53, 69, 0.95)"):
-    st.markdown(f"""
-    <style>
-    @keyframes pulseGlow {{
-        0% {{
-            box-shadow: 0 0 8px {glow_color}, 0 0 18px {glow_color};
-            transform: scale(1.0);
-        }}
-        50% {{
-            box-shadow: 0 0 22px {glow_color}, 0 0 38px {glow_color};
-            transform: scale(1.012);
-        }}
-        100% {{
-            box-shadow: 0 0 8px {glow_color}, 0 0 18px {glow_color};
-            transform: scale(1.0);
-        }}
-    }}
-    .glow-exit-banner {{
-        background: {bg_color};
-        color: #ffffff;
-        padding: 16px 20px;
-        border-radius: 12px;
-        border: 2px solid #fff3cd;
-        font-size: 18px;
-        font-weight: 800;
-        text-align: center;
-        margin: 12px 0;
-        animation: pulseGlow 1.1s infinite ease-in-out;
-    }}
-    </style>
-    <div class="glow-exit-banner">💡 {message}</div>
-    """, unsafe_allow_html=True)
-
-# الشريط الجانبي
-st.sidebar.header("📡 رادار الفرص (USDT)")
-timeframe = st.sidebar.selectbox("الإطار الزمني", options=["1m", "5m", "15m"], index=1)
-
-if st.sidebar.button("🔍 ابحث عن أفضل عملة الآن", type="primary", use_container_width=True):
-    with st.sidebar.status("جاري مسح العملات واختيار الفرصة..."):
-        ranked = []
-        for coin in WATCHLIST_USDT:
-            d, _ = fetch_usdt_ohlcv(coin, interval=timeframe, limit=150)
-            if d is not None and len(d) >= 40:
-                ind_d = compute_expert_indicators(d)
-                _, bias = get_htf_bias_usdt(coin)
-                n_info = fetch_brief_news_signal(coin)
-                res = veteran_expert_decision(ind_d, len(ind_d) - 1, htf_bias=bias, news_info=n_info)
-                ranked.append({
-                    "العملة": coin,
-                    "القوة": res['score'],
-                    "الأخبار": n_info['score'],
-                    "ADX": round(res['adx'], 1),
-                    "abs_s": abs(res['score'])
-                })
-
-        if ranked:
-            rdf = pd.DataFrame(ranked).sort_values(by='abs_s', ascending=False).reset_index(drop=True)
-            top_candidates = rdf.head(6).to_dict("records")
-
-            prev_coins = [x["العملة"] for x in st.session_state.radar_candidates]
-            curr_coins = [x["العملة"] for x in top_candidates]
-            if prev_coins == curr_coins and len(top_candidates) > 1:
-                next_idx = (st.session_state.radar_cycle_idx + 1) % len(top_candidates)
-            else:
-                next_idx = 0
-
-            st.session_state.radar_candidates = top_candidates
-            st.session_state.radar_cycle_idx = next_idx
-
-            chosen = top_candidates[next_idx]
-            st.session_state.selected_symbol = chosen["العملة"]
-            st.session_state.radar_symbol = chosen["العملة"]
-            st.session_state.radar_decision = "SELL" if chosen["القوة"] < 0 else "BUY"
-
-            d_txt = "شراء 🟢" if chosen["القوة"] > 0 else "بيع 🔴"
-            st.sidebar.success(
-                f"🎯 **{chosen['العملة']}** ({next_idx + 1}/{len(top_candidates)}) — "
-                f"{d_txt} ({int(chosen['abs_s'])}/100)"
-            )
-            st.sidebar.dataframe(rdf[['العملة', 'القوة', 'الأخبار']], use_container_width=True, hide_index=True)
-
-st.sidebar.markdown("---")
-st.sidebar.header("⚙️ إعدادات الصفقة")
-raw_input = st.sidebar.text_input("رمز العملة (USDT)", value=st.session_state.selected_symbol)
-symbol = normalize_symbol_to_usdt(raw_input)
-if symbol != st.session_state.radar_symbol:
-    st.session_state.radar_decision
+        "bull_conf": bull_conf, "bear_conf": bear_conf
