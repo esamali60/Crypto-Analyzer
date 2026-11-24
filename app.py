@@ -6,6 +6,7 @@ import yfinance as yf
 import plotly.express as px
 import xml.etree.ElementTree as ET
 from datetime import datetime
+import time
 import re
 
 st.set_page_config(page_title="مكتب التداول الذكي — تنبيهات مضيئة", layout="wide")
@@ -91,6 +92,7 @@ def fetch_brief_news_signal(symbol_usdt):
     else:
         return {"score": 0, "status": "متعادلة ⚪", "color": "#6c757d"}
 
+@st.cache_data(ttl=8)
 def fetch_usdt_ohlcv(symbol_usdt, interval="5m", limit=150):
     sym = normalize_symbol_to_usdt(symbol_usdt)
 
@@ -441,7 +443,6 @@ if st.sidebar.button("🔍 ابحث عن أفضل عملة الآن", type="prim
             rdf = pd.DataFrame(ranked).sort_values(by='abs_s', ascending=False).reset_index(drop=True)
             top_candidates = rdf.head(6).to_dict("records")
 
-            # إذا كانت نفس القائمة موجودة، انتقل للعملة التالية في الترتيب
             prev_coins = [x["العملة"] for x in st.session_state.radar_candidates]
             curr_coins = [x["العملة"] for x in top_candidates]
             if prev_coins == curr_coins and len(top_candidates) > 1:
@@ -469,38 +470,4 @@ st.sidebar.header("⚙️ إعدادات الصفقة")
 raw_input = st.sidebar.text_input("رمز العملة (USDT)", value=st.session_state.selected_symbol)
 symbol = normalize_symbol_to_usdt(raw_input)
 if symbol != st.session_state.radar_symbol:
-    st.session_state.radar_decision = ""
-st.session_state.selected_symbol = symbol
-
-capital_usdt = st.sidebar.number_input("رأس المال (USDT)", min_value=10.0, value=500.0, step=50.0)
-max_risk_pct = st.sidebar.slider("المخاطرة القصوى (%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5)
-sl_mode = st.sidebar.radio("حساب وقف الخسارة", options=["ذكي حسب التقلب (ATR)", "نسبة ثابتة (%)"], index=0)
-fixed_sl_pct = st.sidebar.slider("نسبة الوقف الثابتة (%)", min_value=0.5, max_value=10.0, value=1.5, step=0.5)
-auto_advance = st.sidebar.checkbox("تقدّم وتأمين الصفقة تلقائياً", value=True)
-refresh_rate = st.sidebar.selectbox("التحديث (ثانية)", options=[10, 15, 30, 60], index=1)
-
-@st.fragment(run_every=refresh_rate)
-def live_trading_dashboard():
-    df, data_source = fetch_usdt_ohlcv(symbol, interval=timeframe, limit=150)
-    if df is None or len(df) < 40:
-        st.error(f"تعذر جلب البيانات للزوج {symbol}.")
-        return
-
-    ind_df = compute_expert_indicators(df)
-    htf_text, htf_bias = get_htf_bias_usdt(symbol)
-    news_info = fetch_brief_news_signal(symbol)
-    analysis = veteran_expert_decision(ind_df, len(ind_df) - 1, htf_bias=htf_bias, news_info=news_info)
-
-    price = analysis['price']
-    rsi = analysis['rsi']
-    mfi = analysis['mfi']
-    adx = analysis['adx']
-    atr = analysis['atr']
-    score = analysis['score']
-
-    if st.session_state.radar_symbol == symbol and st.session_state.radar_decision in ["BUY", "SELL"]:
-        decision = st.session_state.radar_decision
-    else:
-        decision = analysis['decision']
-
-    last_
+    st.session_state.radar_decision
