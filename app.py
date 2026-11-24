@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 import re
 
-st.set_page_config(page_title="مكتب التداول الذكي — دعم القرار والواجهة", layout="wide")
+st.set_page_config(page_title="مكتب التداول الذكي — تنبيهات مضيئة", layout="wide")
 
 defaults = {
     "trade_active": False,
@@ -23,6 +23,8 @@ defaults = {
     "selected_symbol": "BTCUSDT",
     "radar_symbol": "",
     "radar_decision": "",
+    "radar_candidates": [],
+    "radar_cycle_idx": 0,
     "trade_history": [],
     "breakeven_triggered": False
 }
@@ -30,7 +32,7 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-st.title("🧭 مكتب التداول الذكي — دعم القرار والواجهة (USDT)")
+st.title("🧭 مكتب التداول الذكي — تنبيهات خروج مضيئة وتبديل الفرص (USDT)")
 
 WATCHLIST_USDT = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "ADAUSDT",
@@ -380,12 +382,45 @@ def get_htf_bias_usdt(symbol_usdt):
         return "هابط 🔴", -1
     return "عرضي 🟡", 0
 
+def render_glowing_alert(message, bg_color="#dc3545", glow_color="rgba(220, 53, 69, 0.95)"):
+    st.markdown(f"""
+    <style>
+    @keyframes pulseGlow {{
+        0% {{
+            box-shadow: 0 0 8px {glow_color}, 0 0 18px {glow_color};
+            transform: scale(1.0);
+        }}
+        50% {{
+            box-shadow: 0 0 22px {glow_color}, 0 0 38px {glow_color};
+            transform: scale(1.012);
+        }}
+        100% {{
+            box-shadow: 0 0 8px {glow_color}, 0 0 18px {glow_color};
+            transform: scale(1.0);
+        }}
+    }}
+    .glow-exit-banner {{
+        background: {bg_color};
+        color: #ffffff;
+        padding: 16px 20px;
+        border-radius: 12px;
+        border: 2px solid #fff3cd;
+        font-size: 18px;
+        font-weight: 800;
+        text-align: center;
+        margin: 12px 0;
+        animation: pulseGlow 1.1s infinite ease-in-out;
+    }}
+    </style>
+    <div class="glow-exit-banner">💡 {message}</div>
+    """, unsafe_allow_html=True)
+
 # الشريط الجانبي
 st.sidebar.header("📡 رادار الفرص (USDT)")
 timeframe = st.sidebar.selectbox("الإطار الزمني", options=["1m", "5m", "15m"], index=1)
 
 if st.sidebar.button("🔍 ابحث عن أفضل عملة الآن", type="primary", use_container_width=True):
-    with st.sidebar.status("جاري فحص العملات..."):
+    with st.sidebar.status("جاري مسح العملات واختيار الفرصة..."):
         ranked = []
         for coin in WATCHLIST_USDT:
             d, _ = fetch_usdt_ohlcv(coin, interval=timeframe, limit=150)
@@ -398,19 +433,35 @@ if st.sidebar.button("🔍 ابحث عن أفضل عملة الآن", type="prim
                     "العملة": coin,
                     "القوة": res['score'],
                     "الأخبار": n_info['score'],
-                    "ADX": round(res['adx'], 1)
+                    "ADX": round(res['adx'], 1),
+                    "abs_s": abs(res['score'])
                 })
 
         if ranked:
-            rdf = pd.DataFrame(ranked)
-            rdf['abs_s'] = rdf['القوة'].abs()
-            rdf = rdf.sort_values(by='abs_s', ascending=False).reset_index(drop=True)
-            top = rdf.iloc[0]
-            st.session_state.selected_symbol = top['العملة']
-            st.session_state.radar_symbol = top['العملة']
-            st.session_state.radar_decision = "SELL" if top['القوة'] < 0 else "BUY"
-            d_txt = "شراء 🟢" if top['القوة'] > 0 else "بيع 🔴"
-            st.sidebar.success(f"🎯 **{top['العملة']}** — {d_txt} ({int(top['abs_s'])}/100)")
+            rdf = pd.DataFrame(ranked).sort_values(by='abs_s', ascending=False).reset_index(drop=True)
+            top_candidates = rdf.head(6).to_dict("records")
+
+            # إذا كانت نفس القائمة موجودة، انتقل للعملة التالية في الترتيب
+            prev_coins = [x["العملة"] for x in st.session_state.radar_candidates]
+            curr_coins = [x["العملة"] for x in top_candidates]
+            if prev_coins == curr_coins and len(top_candidates) > 1:
+                next_idx = (st.session_state.radar_cycle_idx + 1) % len(top_candidates)
+            else:
+                next_idx = 0
+
+            st.session_state.radar_candidates = top_candidates
+            st.session_state.radar_cycle_idx = next_idx
+
+            chosen = top_candidates[next_idx]
+            st.session_state.selected_symbol = chosen["العملة"]
+            st.session_state.radar_symbol = chosen["العملة"]
+            st.session_state.radar_decision = "SELL" if chosen["القوة"] < 0 else "BUY"
+
+            d_txt = "شراء 🟢" if chosen["القوة"] > 0 else "بيع 🔴"
+            st.sidebar.success(
+                f"🎯 **{chosen['العملة']}** ({next_idx + 1}/{len(top_candidates)}) — "
+                f"{d_txt} ({int(chosen['abs_s'])}/100)"
+            )
             st.sidebar.dataframe(rdf[['العملة', 'القوة', 'الأخبار']], use_container_width=True, hide_index=True)
 
 st.sidebar.markdown("---")
@@ -452,227 +503,4 @@ def live_trading_dashboard():
     else:
         decision = analysis['decision']
 
-    last_update = datetime.now().strftime("%H:%M:%S")
-
-    if sl_mode == "ذكي حسب التقلب (ATR)" and atr > 0:
-        sl_dist = max(atr * 2.0, price * 0.005)
-        sl_pct = (sl_dist / price) * 100.0
-    else:
-        sl_pct = fixed_sl_pct
-        sl_dist = price * (sl_pct / 100.0)
-
-    risk_usdt = capital_usdt * (max_risk_pct / 100.0)
-    pos_usdt = min(capital_usdt, risk_usdt / (sl_pct / 100.0))
-
-    # بناء ملخص القرار العملي
-    if decision == "BUY":
-        sig_label = f"شراء (BUY) 🟢 | {abs(score)}/100"
-        sig_color = "#198754"
-        btn_tag = "🟢 شراء"
-        guidance = f"أفضلية شراء ({analysis['bull_conf']} أدلة داعمة) — راقب الوقف والهدفين."
-    elif decision == "SELL":
-        sig_label = f"بيع (SELL) 🔴 | {abs(score)}/100"
-        sig_color = "#dc3545"
-        btn_tag = "🔴 بيع"
-        guidance = f"أفضلية بيع ({analysis['bear_conf']} أدلة داعمة) — التزم بالوقف أعلى الدخول."
-    else:
-        sig_label = f"ترقب ⏳ | {score}"
-        sig_color = "#6c757d"
-        btn_tag = "🟡 ترقب (دخول يدوي)"
-        guidance = "الإشارة متوسطة أو متذبذبة — الانتظار أفضل من التسرع."
-
-    st.caption(
-        f"📡 **{data_source}** | تحديث: **{last_update}** | الفريم: **{timeframe}** | "
-        f"الساعة: **{htf_text}** | ADX: **{adx:.1f}**"
-    )
-
-    # شريط الأخبار الموجز الملون
-    st.markdown(f"""
-    <div style="background-color: {news_info['color']}; padding: 8px 14px; border-radius: 8px; color: white; font-weight: bold; margin-bottom: 10px;">
-        📰 الأخبار: {news_info['status']} ({news_info['score']:+d})
-    </div>
-    """, unsafe_allow_html=True)
-
-    # بطاقة دعم القرار المباشرة
-    st.info(f"🧭 **توجيه القرار الآن:** {guidance}")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric(f"سعر {symbol}", format_price(price), f"VWAP: {format_price(analysis['vwap'])}")
-    c2.metric("MFI / RSI", f"{mfi:.0f} / {rsi:.0f}")
-    c3.metric("حجم الصفقة", f"{pos_usdt:,.2f} USDT", f"مخاطرة {risk_usdt:,.2f} USDT")
-
-    with c4:
-        st.markdown(f"""
-        <div style="background-color: {sig_color}; padding: 12px; border-radius: 10px; text-align: center; color: white; font-weight: bold; font-size: 15px;">
-            {sig_label}
-        </div>
-        """, unsafe_allow_html=True)
-
-    with st.expander("📋 تفاصيل المؤشرات والأخبار", expanded=False):
-        st.write(" • ".join(analysis['reasons']))
-
-    st.markdown("---")
-
-    if not st.session_state.trade_active:
-        st.subheader(f"🚀 صفقة جديدة — {symbol}")
-
-        if decision == "SELL":
-            is_sell = True
-            sl_price = price + sl_dist
-            tp1_price = price - (sl_dist * 1.5)
-            tp2_price = price - (sl_dist * 2.5)
-            sl_txt = f"+{sl_pct:.2f}%"
-            tp1_txt = f"-{sl_pct * 1.5:.2f}%"
-            tp2_txt = f"-{sl_pct * 2.5:.2f}%"
-        elif decision == "BUY":
-            is_sell = False
-            sl_price = price - sl_dist
-            tp1_price = price + (sl_dist * 1.5)
-            tp2_price = price + (sl_dist * 2.5)
-            sl_txt = f"-{sl_pct:.2f}%"
-            tp1_txt = f"+{sl_pct * 1.5:.2f}%"
-            tp2_txt = f"+{sl_pct * 2.5:.2f}%"
-        else:
-            st.warning("⏳ الإشارة الحالية **ترقب** — الأرقام أدناه توضيحية حتى تتضح إشارة شراء أو بيع.")
-            is_sell = score < 0
-            if is_sell:
-                sl_price = price + sl_dist
-                tp1_price = price - (sl_dist * 1.5)
-                tp2_price = price - (sl_dist * 2.5)
-                sl_txt = f"+{sl_pct:.2f}%"
-                tp1_txt = f"-{sl_pct * 1.5:.2f}%"
-                tp2_txt = f"-{sl_pct * 2.5:.2f}%"
-            else:
-                sl_price = price - sl_dist
-                tp1_price = price + (sl_dist * 1.5)
-                tp2_price = price + (sl_dist * 2.5)
-                sl_txt = f"-{sl_pct:.2f}%"
-                tp1_txt = f"+{sl_pct * 1.5:.2f}%"
-                tp2_txt = f"+{sl_pct * 2.5:.2f}%"
-
-        # حساب العائد والمخاطرة المتوقعة بالدولار الرقمي
-        coins_est = pos_usdt / price if price > 0 else 0.0
-        est_loss = abs(price - sl_price) * coins_est
-        est_tp1 = abs(tp1_price - price) * coins_est
-        est_tp2 = abs(tp2_price - price) * coins_est
-
-        p1, p2, p3, p4 = st.columns(4)
-        p1.info(f"**الدخول:**\n\n{format_price(price)}")
-        p2.warning(f"**الوقف ({sl_txt}):**\n\n{format_price(sl_price)}\n\nخسارة محتملة: -{est_loss:,.2f} USDT")
-        p3.success(f"**الهدف 1 ({tp1_txt}):**\n\n{format_price(tp1_price)}\n\nربح محتمل: +{est_tp1:,.2f} USDT")
-        p4.success(f"**الهدف 2 ({tp2_txt}):**\n\n{format_price(tp2_price)}\n\nربح محتمل: +{est_tp2:,.2f} USDT")
-
-        if st.button(f"✅ بدء الصفقة ({btn_tag}) — {pos_usdt:,.2f} USDT", type="primary", use_container_width=True):
-            st.session_state.trade_active = True
-            st.session_state.entry_price = price
-            st.session_state.stop_loss = sl_price
-            st.session_state.take_profit_1 = tp1_price
-            st.session_state.take_profit_2 = tp2_price
-            st.session_state.position_size_usdt = pos_usdt
-            st.session_state.coins_bought = pos_usdt / price
-            st.session_state.trade_symbol = symbol
-            st.session_state.trade_type = "بيع" if is_sell else "شراء"
-            st.session_state.breakeven_triggered = False
-            st.rerun()
-
-    else:
-        t_type = st.session_state.trade_type
-        entry = st.session_state.entry_price
-        coins = st.session_state.coins_bought
-        pos_usdt = st.session_state.position_size_usdt
-        tp1 = st.session_state.take_profit_1
-        tp2 = st.session_state.take_profit_2
-
-        if auto_advance:
-            if t_type == "شراء":
-                if price >= entry + (tp1 - entry) * 0.55 and not st.session_state.breakeven_triggered:
-                    st.session_state.stop_loss = max(st.session_state.stop_loss, entry * 1.001)
-                    st.session_state.breakeven_triggered = True
-                if price >= tp1 and price > entry:
-                    st.session_state.stop_loss = max(st.session_state.stop_loss, price - (sl_dist * 0.85))
-            else:
-                if price <= entry - (entry - tp1) * 0.55 and not st.session_state.breakeven_triggered:
-                    st.session_state.stop_loss = min(st.session_state.stop_loss, entry * 0.999)
-                    st.session_state.breakeven_triggered = True
-                if price <= tp1 and price < entry:
-                    st.session_state.stop_loss = min(st.session_state.stop_loss, price + (sl_dist * 0.85))
-
-        sl = st.session_state.stop_loss
-
-        if t_type == "بيع":
-            pnl_usdt = (entry - price) * coins
-            pnl_pct = ((entry - price) / entry) * 100.0
-            hit_sl = price >= sl
-            hit_tp1 = price <= tp1
-            hit_tp2 = price <= tp2
-            opp_sig = decision == "BUY"
-        else:
-            pnl_usdt = (price - entry) * coins
-            pnl_pct = ((price - entry) / entry) * 100.0
-            hit_sl = price <= sl
-            hit_tp1 = price >= tp1
-            hit_tp2 = price >= tp2
-            opp_sig = decision == "SELL"
-
-        st.subheader(f"📡 صفقة نشطة: {st.session_state.trade_symbol} ({t_type}) | {pos_usdt:,.2f} USDT")
-
-        if hit_sl:
-            st.error("🚨 وصل السعر لوقف الخسارة — اضغط **خروج الآن**.")
-        elif hit_tp2:
-            st.success("🏆 تحقق الهدف الثاني (TP2) — اضغط **خروج الآن** لجني الربح.")
-        elif hit_tp1:
-            st.success("🎯 تحقق الهدف الأول (TP1) — الصفقة تتقدم نحو الهدف الثاني.")
-        elif opp_sig:
-            st.warning("⚠️ انعكست الإشارة الفنية — يُنصح بالخروج.")
-        else:
-            st.info("🟢 الصفقة مستمرة.")
-
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("الدخول", format_price(entry))
-        m2.metric("الربح / الخسارة", f"{pnl_usdt:,.2f} USDT", f"{pnl_pct:.2f}%")
-        m3.metric("الوقف", format_price(sl))
-        m4.metric("الهدف 1", format_price(tp1))
-        m5.metric("الهدف 2", format_price(tp2))
-
-        if st.button("🚨 خروج الآن", type="primary", use_container_width=True):
-            st.session_state.trade_history.append({
-                "الوقت": datetime.now().strftime("%H:%M:%S"),
-                "الزوج": st.session_state.trade_symbol,
-                "النوع": t_type,
-                "الدخول": round(entry, 4 if entry < 10 else 2),
-                "الخروج": round(price, 4 if price < 10 else 2),
-                "النتيجة (USDT)": round(pnl_usdt, 2),
-                "النسبة (%)": round(pnl_pct, 2)
-            })
-            st.session_state.trade_active = False
-            st.rerun()
-
-    st.markdown("---")
-    plot_df = df.tail(65).copy()
-    plot_df['EMA 9'] = ind_df['ema9'].tail(65)
-    plot_df['EMA 21'] = ind_df['ema21'].tail(65)
-    plot_df['VWAP'] = ind_df['vwap'].tail(65)
-
-    fig = px.line(plot_df, x='timestamp', y=['close', 'EMA 9', 'EMA 21', 'VWAP'], title=f"الشارت اللحظي — {symbol}")
-    if st.session_state.trade_active:
-        fig.add_hline(y=st.session_state.entry_price, line_dash="dash", line_color="blue", annotation_text="دخول")
-        fig.add_hline(y=st.session_state.stop_loss, line_dash="dot", line_color="red", annotation_text="وقف")
-        fig.add_hline(y=st.session_state.take_profit_1, line_dash="dot", line_color="orange", annotation_text="هدف 1")
-        fig.add_hline(y=st.session_state.take_profit_2, line_dash="dot", line_color="green", annotation_text="هدف 2")
-    st.plotly_chart(fig, use_container_width=True)
-
-    if st.session_state.trade_history:
-        st.markdown("---")
-        st.subheader("📒 سجل الجلسة (USDT)")
-        hist_df = pd.DataFrame(st.session_state.trade_history)
-        total_pnl = hist_df["النتيجة (USDT)"].sum()
-        wins = int((hist_df["النتيجة (USDT)"] > 0).sum())
-        win_rate = (wins / len(hist_df)) * 100.0
-
-        s1, s2, s3 = st.columns(3)
-        s1.metric("الصفقات", len(hist_df))
-        s2.metric("نسبة النجاح", f"{win_rate:.1f}%")
-        s3.metric("الصافي", f"{total_pnl:,.2f} USDT")
-        st.dataframe(hist_df, use_container_width=True, hide_index=True)
-
-live_trading_dashboard()
+    last_
