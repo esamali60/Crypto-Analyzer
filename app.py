@@ -13,7 +13,7 @@ try:
 except Exception:
     yf = None
 
-st.set_page_config(page_title="مكتب التداول الذكي — 9 مدارس (USDT)", layout="wide")
+st.set_page_config(page_title="مكتب التداول الذكي — 9 مدارس + أخبار (USDT)", layout="wide")
 
 DEFAULTS = {
     "trade_active": False,
@@ -299,122 +299,145 @@ def evaluate_nine_schools(ind_df, idx, news_info=None):
     adx = float(ind_df["adx"].iloc[idx])
     atr = float(ind_df["atr"].iloc[idx])
 
-    score = 0
+    tech_score = 0
     bull_schools = 0
     bear_schools = 0
     reasons = []
 
     if ema9 > ema21 > ema50:
-        score += 14
+        tech_score += 14
         bull_schools += 1
         reasons.append("1. المتوسطات: صاعد (EMA 9>21>50)")
     elif ema9 < ema21 < ema50:
-        score -= 14
+        tech_score -= 14
         bear_schools += 1
         reasons.append("1. المتوسطات: هابط (EMA 9<21<50)")
     else:
         reasons.append("1. المتوسطات: مختلط")
 
     if rsi < 35:
-        score += 11
+        tech_score += 11
         bull_schools += 1
         reasons.append(f"2. RSI: تشبع بيعي ({rsi:.0f})")
     elif rsi > 65:
-        score -= 11
+        tech_score -= 11
         bear_schools += 1
         reasons.append(f"2. RSI: تشبع شرائي ({rsi:.0f})")
     else:
         reasons.append(f"2. RSI: محايد ({rsi:.0f})")
 
     if s_rsi < 25 and hist >= prev_hist:
-        score += 10
+        tech_score += 10
         bull_schools += 1
         reasons.append("3. StochRSI: انعكاس صاعد")
     elif s_rsi > 75 and hist <= prev_hist:
-        score -= 10
+        tech_score -= 10
         bear_schools += 1
         reasons.append("3. StochRSI: انعكاس هابط")
     else:
         reasons.append("3. StochRSI: مستقر")
 
     if macd > sig and hist >= prev_hist:
-        score += 12
+        tech_score += 12
         bull_schools += 1
         reasons.append("4. الماكد: زخم إيجابي")
     elif macd < sig and hist <= prev_hist:
-        score -= 12
+        tech_score -= 12
         bear_schools += 1
         reasons.append("4. الماكد: زخم سلبي")
     else:
         reasons.append("4. الماكد: متباطئ")
 
     if lower_b > 0 and price <= lower_b * 1.004:
-        score += 10
+        tech_score += 10
         bull_schools += 1
         reasons.append("5. بولينجر: قرب الحد السفلي")
     elif upper_b > 0 and price >= upper_b * 0.996:
-        score -= 10
+        tech_score -= 10
         bear_schools += 1
         reasons.append("5. بولينجر: قرب الحد العلوي")
     else:
         reasons.append("5. بولينجر: داخل النطاق")
 
     if mfi < 32:
-        score += 12
+        tech_score += 12
         bull_schools += 1
         reasons.append(f"6. MFI: دخول سيولة ({mfi:.0f})")
     elif mfi > 68:
-        score -= 12
+        tech_score -= 12
         bear_schools += 1
         reasons.append(f"6. MFI: خروج سيولة ({mfi:.0f})")
     else:
         reasons.append(f"6. MFI: متوازن ({mfi:.0f})")
 
     if price >= vwap:
-        score += 11
+        tech_score += 11
         bull_schools += 1
         reasons.append("7. VWAP: أعلى المتوسط الحجمي")
     else:
-        score -= 11
+        tech_score -= 11
         bear_schools += 1
         reasons.append("7. VWAP: أدنى المتوسط الحجمي")
 
     if price > tenkan > kijun:
-        score += 10
+        tech_score += 10
         bull_schools += 1
         reasons.append("8. إيشيموكو: إيجابي")
     elif price < tenkan < kijun:
-        score -= 10
+        tech_score -= 10
         bear_schools += 1
         reasons.append("8. إيشيموكو: سلبي")
     else:
         reasons.append("8. إيشيموكو: متعادل")
 
     if adx >= 22:
-        if score >= 0:
-            score += 10
+        if tech_score >= 0:
+            tech_score += 10
             bull_schools += 1
         else:
-            score -= 10
+            tech_score -= 10
             bear_schools += 1
         reasons.append(f"9. ADX/ATR: اتجاه قوي ({adx:.1f})")
     else:
-        score = int(score * 0.7)
+        tech_score = int(tech_score * 0.7)
         reasons.append(f"9. ADX/ATR: حركة هادئة ({adx:.1f})")
 
     n_score = int(news_info.get("score", 0))
     if n_score != 0:
-        score += n_score
         reasons.append(f"الأخبار: ({n_score:+d})")
 
-    score = max(-100, min(100, score))
+    # دمج ذكي يوازن بين المدارس الـ 9 والأخبار ويمنع الاندفاع عند التعارض
+    conflict = (tech_score > 0 and n_score < 0) or (tech_score < 0 and n_score > 0)
+    aligned = (tech_score > 0 and n_score > 0) or (tech_score < 0 and n_score < 0)
 
-    if score >= 30:
-        decision = "BUY"
-    elif score <= -30:
-        decision = "SELL"
+    total_score = max(-100, min(100, tech_score + n_score))
+
+    if conflict:
+        # في حال تعارض الأخبار مع المدارس، نشترط أغلبية واضحة (5/9 مدارس فأكثر) وقوة كافية
+        if total_score >= 38 and bull_schools >= 5:
+            decision = "BUY"
+            verdict_note = f"أفضلية شراء فنية ({bull_schools}/9 مدارس) رغم سلبية الأخبار — التزم بالوقف."
+        elif total_score <= -38 and bear_schools >= 5:
+            decision = "SELL"
+            verdict_note = f"أفضلية بيع فنية ({bear_schools}/9 مدارس) رغم إيجابية الأخبار — التزم بالوقف."
+        else:
+            decision = "NEUTRAL"
+            verdict_note = (
+                f"⚠️ تعارض بين الأخبار ({n_score:+d}) والمدارس الـ 9 ({bull_schools} شراء / {bear_schools} بيع) "
+                "— الأفضلية للترقب أو الدخول بحذر."
+            )
     else:
-        decision = "NEUTRAL"
+        if total_score >= 30 and bull_schools >= 4:
+            decision = "BUY"
+            tag = "توافق قوي (مدارس + أخبار)" if aligned else "أفضلية شراء فنية"
+            verdict_note = f"{tag}: {bull_schools}/9 مدارس داعمة للشراء."
+        elif total_score <= -30 and bear_schools >= 4:
+            decision = "SELL"
+            tag = "توافق قوي (مدارس + أخبار)" if aligned else "أفضلية بيع فنية"
+            verdict_note = f"{tag}: {bear_schools}/9 مدارس داعمة للبيع."
+        else:
+            decision = "NEUTRAL"
+            verdict_note = "الإشارة متوسطة أو متذبذبة — الانتظار أفضل من التسرع."
 
     return {
         "price": price,
@@ -423,10 +446,14 @@ def evaluate_nine_schools(ind_df, idx, news_info=None):
         "adx": adx,
         "atr": atr,
         "vwap": vwap,
-        "score": score,
+        "tech_score": tech_score,
+        "score": total_score,
         "decision": decision,
         "bull_schools": bull_schools,
         "bear_schools": bear_schools,
+        "conflict": conflict,
+        "aligned": aligned,
+        "verdict_note": verdict_note,
         "reasons": reasons,
     }
 
@@ -459,6 +486,7 @@ def render_glowing_alert(message, bg_color="#dc3545", glow_color="rgba(220, 53, 
     )
 
 
+# الشريط الجانبي
 st.sidebar.header("📡 رادار الفرص (USDT)")
 timeframe = st.sidebar.selectbox("الإطار الزمني", options=["1m", "5m", "15m"], index=1)
 
@@ -470,16 +498,19 @@ if st.sidebar.button("🔍 ابحث عن أفضل عملة الآن", type="prim
             ind_c = compute_nine_schools_indicators(d_coin)
             n_c = fetch_brief_news_signal(coin)
             res_c = evaluate_nine_schools(ind_c, len(ind_c) - 1, news_info=n_c)
+            # أولوية أعلى للفرص المتوافقة بين المدارس والأخبار
+            priority = abs(res_c["score"]) + (15 if res_c["aligned"] else (-10 if res_c["conflict"] else 0))
             ranked.append({
                 "العملة": coin,
                 "القوة": res_c["score"],
                 "الأخبار": n_c["score"],
-                "ADX": round(res_c["adx"], 1),
-                "abs_s": abs(res_c["score"]),
+                "التوافق": "✅ متوافق" if res_c["aligned"] else ("⚠️ تعارض" if res_c["conflict"] else "➖ محايد"),
+                "priority": priority,
+                "decision": res_c["decision"],
             })
 
     if ranked:
-        rdf = pd.DataFrame(ranked).sort_values(by="abs_s", ascending=False).reset_index(drop=True)
+        rdf = pd.DataFrame(ranked).sort_values(by="priority", ascending=False).reset_index(drop=True)
         top_candidates = rdf.head(6).to_dict("records")
         prev_coins = [x["العملة"] for x in st.session_state.radar_candidates]
         curr_coins = [x["العملة"] for x in top_candidates]
@@ -493,14 +524,14 @@ if st.sidebar.button("🔍 ابحث عن أفضل عملة الآن", type="prim
         chosen = top_candidates[next_idx]
         st.session_state.selected_symbol = chosen["العملة"]
         st.session_state.radar_symbol = chosen["العملة"]
-        st.session_state.radar_decision = "SELL" if chosen["القوة"] < 0 else "BUY"
+        st.session_state.radar_decision = chosen["decision"] if chosen["decision"] in ["BUY", "SELL"] else ""
 
         d_txt = "شراء 🟢" if chosen["القوة"] > 0 else "بيع 🔴"
         st.sidebar.success(
             f"🎯 **{chosen['العملة']}** ({next_idx + 1}/{len(top_candidates)}) — "
-            f"{d_txt} ({int(chosen['abs_s'])}/100)"
+            f"{d_txt} ({int(abs(chosen['القوة']))}/100) | {chosen['التوافق']}"
         )
-        st.sidebar.dataframe(rdf[["العملة", "القوة", "الأخبار"]], use_container_width=True, hide_index=True)
+        st.sidebar.dataframe(rdf[["العملة", "القوة", "الأخبار", "التوافق"]], use_container_width=True, hide_index=True)
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ إعدادات الصفقة")
@@ -516,7 +547,8 @@ sl_mode = st.sidebar.radio("حساب وقف الخسارة", options=["ذكي ح
 fixed_sl_pct = st.sidebar.slider("نسبة الوقف الثابتة (%)", min_value=0.5, max_value=10.0, value=1.5, step=0.5)
 auto_advance = st.sidebar.checkbox("تقدّم وتأمين الصفقة تلقائياً", value=True)
 
-st.title("🧭 مكتب التداول الذكي — 9 مدارس احترافية (USDT)")
+# اللوحة الرئيسية
+st.title("🧭 مكتب التداول الذكي — 9 مدارس احترافية + تصفية الأخبار (USDT)")
 
 top_l, top_r = st.columns([4, 1])
 with top_r:
@@ -556,18 +588,12 @@ pos_usdt = min(capital_usdt, risk_usdt / (sl_pct / 100.0))
 if decision == "BUY":
     sig_label = f"شراء (BUY) 🟢 | {abs(score)}/100"
     sig_color = "#198754"
-    btn_tag = "🟢 شراء"
-    guidance = f"أفضلية شراء ({analysis['bull_schools']}/9 مدارس داعمة) — راقب الوقف والهدفين."
 elif decision == "SELL":
     sig_label = f"بيع (SELL) 🔴 | {abs(score)}/100"
     sig_color = "#dc3545"
-    btn_tag = "🔴 بيع"
-    guidance = f"أفضلية بيع ({analysis['bear_schools']}/9 مدارس داعمة) — التزم بالوقف أعلى الدخول."
 else:
-    sig_label = f"ترقب ⏳ | {score}"
+    sig_label = f"ترقب ⏳ | {score:+d}"
     sig_color = "#6c757d"
-    btn_tag = "🟡 ترقب (دخول يدوي)"
-    guidance = "الإشارة متوسطة أو متذبذبة — الانتظار أفضل من التسرع."
 
 with top_l:
     st.caption(f"📡 **{data_source}** | تحديث: **{last_update}** | الفريم: **{timeframe}** | ADX: **{adx:.1f}**")
@@ -575,11 +601,17 @@ with top_l:
 st.markdown(
     f'<div style="background-color: {news_info["color"]}; padding: 8px 14px; border-radius: 8px; '
     f'color: white; font-weight: bold; margin-bottom: 10px;">'
-    f'📰 الأخبار: {news_info["status"]} ({news_info["score"]:+d})</div>',
+    f'📰 الأخبار: {news_info["status"]} ({news_info["score"]:+d}) | '
+    f'📊 المدارس الفنية: {analysis["bull_schools"]} شراء / {analysis["bear_schools"]} بيع ({analysis["tech_score"]:+d})</div>',
     unsafe_allow_html=True,
 )
 
-st.info(f"🧭 **توجيه القرار الآن:** {guidance}")
+if analysis["conflict"]:
+    st.warning(f"⚖️ **خلاصة الأفضلية للتداول:** {analysis['verdict_note']}")
+elif analysis["aligned"]:
+    st.success(f"✅ **خلاصة الأفضلية للتداول:** {analysis['verdict_note']}")
+else:
+    st.info(f"🧭 **خلاصة الأفضلية للتداول:** {analysis['verdict_note']}")
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric(f"سعر {symbol}", format_price(price), f"VWAP: {format_price(analysis['vwap'])}")
@@ -600,9 +632,31 @@ with st.expander("📋 تفاصيل المدارس الـ 9 والأخبار", e
 st.markdown("---")
 
 if not st.session_state.trade_active:
-    st.subheader(f"🚀 صفقة جديدة — {symbol}")
+    st.subheader(f"🚀 إعداد وتنفيذ الصفقة — {symbol}")
 
-    is_sell = (decision == "SELL") or (decision == "NEUTRAL" and score < 0)
+    # زر التبديل اليدوي بين التلقائي / شراء / بيع
+    trade_override = st.radio(
+        "🔄 اختر اتجاه الصفقة (يمكنك تغييره يدوياً بين شراء أو بيع):",
+        options=["🤖 تلقائي حسب البوت", "🟢 شراء (BUY)", "🔴 بيع (SELL)"],
+        horizontal=True,
+        key=f"dir_override_{symbol}",
+    )
+
+    if trade_override == "🟢 شراء (BUY)":
+        is_sell = False
+        exec_tag = "🟢 شراء (تحديد يدوي)"
+    elif trade_override == "🔴 بيع (SELL)":
+        is_sell = True
+        exec_tag = "🔴 بيع (تحديد يدوي)"
+    else:
+        is_sell = (decision == "SELL") or (decision == "NEUTRAL" and score < 0)
+        if decision == "BUY":
+            exec_tag = "🟢 شراء (توصية البوت)"
+        elif decision == "SELL":
+            exec_tag = "🔴 بيع (توصية البوت)"
+        else:
+            exec_tag = "🔴 بيع (ترقب)" if is_sell else "🟢 شراء (ترقب)"
+
     if is_sell:
         sl_price = price + sl_dist
         tp1_price = price - (sl_dist * 1.5)
@@ -618,21 +672,18 @@ if not st.session_state.trade_active:
         tp1_txt = f"+{sl_pct * 1.5:.2f}%"
         tp2_txt = f"+{sl_pct * 2.5:.2f}%"
 
-    if decision == "NEUTRAL":
-        st.warning("⏳ الإشارة الحالية **ترقب** — الأرقام أدناه توضيحية حتى تتضح إشارة شراء أو بيع.")
-
     coins_est = pos_usdt / price if price > 0 else 0.0
     est_loss = abs(price - sl_price) * coins_est
     est_tp1 = abs(tp1_price - price) * coins_est
     est_tp2 = abs(tp2_price - price) * coins_est
 
     p1, p2, p3, p4 = st.columns(4)
-    p1.info(f"**الدخول:**\n\n{format_price(price)}")
+    p1.info(f"**الدخول ({'بيع 🔴' if is_sell else 'شراء 🟢'}):**\n\n{format_price(price)}")
     p2.warning(f"**الوقف ({sl_txt}):**\n\n{format_price(sl_price)}\n\nخسارة محتملة: -{est_loss:,.2f} USDT")
     p3.success(f"**الهدف 1 ({tp1_txt}):**\n\n{format_price(tp1_price)}\n\nربح محتمل: +{est_tp1:,.2f} USDT")
     p4.success(f"**الهدف 2 ({tp2_txt}):**\n\n{format_price(tp2_price)}\n\nربح محتمل: +{est_tp2:,.2f} USDT")
 
-    if st.button(f"✅ بدء الصفقة ({btn_tag}) — {pos_usdt:,.2f} USDT", type="primary", use_container_width=True):
+    if st.button(f"✅ بدء الصفقة ({exec_tag}) — {pos_usdt:,.2f} USDT", type="primary", use_container_width=True):
         st.session_state.trade_active = True
         st.session_state.entry_price = price
         st.session_state.stop_loss = sl_price
